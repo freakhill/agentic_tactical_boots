@@ -21,7 +21,9 @@ Before executing this skill, read:
 ## Command map
 
 - Hub: `scripts/sandboxctl.fish`
+- Shim installer: `scripts/install-fish-tools.fish`
 - Docker runtime: `scripts/agent-sandbox.fish`, `scripts/agent-sandbox-tools.fish`
+- Optional local runtime: `scripts/macos-sandbox.fish` (`sandboxctl local ...`)
 - VM runtime: `scripts/brew-vm.fish`
 
 ## Default policy
@@ -38,6 +40,13 @@ Before executing this skill, read:
 2. `scripts/sandboxctl.fish docker shell`
 3. Verify non-allowlisted egress is blocked from agent runtime.
 4. `scripts/sandboxctl.fish docker down`
+
+### Optional local macOS sandbox workflow
+
+1. `source scripts/macos-sandbox.fish`
+2. `macos-sandbox run -- /bin/pwd`
+3. For repo-wide access, use `--repo-root-access` (alias of `--path-scope repo-root`).
+4. Prefer Docker/VM for untrusted code paths; use local sandbox as defense-in-depth only.
 
 ### Brew VM workflow
 

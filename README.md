@@ -1,4 +1,4 @@
-# CrewAI Sandbox Toolkit
+# Appropriate footwear for Agentic workflows
 
 Local scripts and docs for running agent workflows with stronger isolation defaults:
 
@@ -12,6 +12,32 @@ Local scripts and docs for running agent workflows with stronger isolation defau
 ```fish
 source .venv/bin/activate.fish
 scripts/sandboxctl.fish help
+```
+
+## Install fish command shims
+
+Install command shims into `~/.local/bin` (default target is `$HOME`):
+
+```fish
+scripts/install-fish-tools.fish install
+```
+
+Use a custom target directory:
+
+```fish
+scripts/install-fish-tools.fish install --target /path/to/target
+```
+
+How mode selection works:
+
+- If `stow` is available, install uses stow-managed symlinks.
+- If `stow` is unavailable, install falls back to managed direct wrapper files.
+- If wrappers were installed directly and `stow` is installed later, first tool run auto-migrates to stow mode.
+
+Uninstall shims:
+
+```fish
+scripts/install-fish-tools.fish uninstall
 ```
 
 ## Contributor policy (important)
@@ -66,6 +92,8 @@ For your use case, enforce three boundaries at all times:
 - Per-process outbound controls are best done with a Network Extension firewall (Little Snitch or LuLu)
 
 Practical consequence: for untrusted agent actions, run them in containers/VMs and keep host-level network controls as defense-in-depth.
+
+Optional exception: if you need a lighter local control layer, you can use `scripts/macos-sandbox.fish` (`sandboxctl local ...`) on systems that still provide `sandbox-exec`. Treat it as defense-in-depth only, not as a substitute for container/VM isolation.
 
 ### Package installer threat model
 
@@ -291,6 +319,47 @@ set -x OPENCODE_CONFIG (pwd)/examples/opencode.restrictive.json
 2. Run OpenCode inside the `agent` container from `examples/docker-compose.yml`
 3. Do not mount host home, only mount repo workspace
 4. Keep proxy allowlist minimal and add domains only when required
+
+### How to use optional local `sandbox-exec` layer on macOS
+
+Use this only when full container/VM flows are not practical.
+
+1. Load helper:
+
+```fish
+source scripts/macos-sandbox.fish
+```
+
+2. Run command with default `cwd` scope and strict egress deny:
+
+```fish
+macos-sandbox run -- /bin/pwd
+```
+
+3. Run command with repository-root scope (alternative to default `cwd` scope):
+
+```fish
+macos-sandbox run --repo-root-access -- /usr/bin/env ls
+macos-sandbox run --path-scope repo-root -- /usr/bin/env ls
+```
+
+4. Use through the unified hub:
+
+```fish
+scripts/sandboxctl.fish local run --repo-root-access -- /bin/pwd
+```
+
+5. Add explicit additional paths only when needed:
+
+```fish
+macos-sandbox run --allow-read ~/.config --allow-write ./tmp -- /usr/bin/env ls
+```
+
+Notes:
+
+- `--repo-root-access` is an alias for `--path-scope repo-root`
+- `--network-policy strict-egress` (default) denies outbound network in profile
+- Prefer Docker/VM workflows for untrusted execution
 
 ### How to lock down Claude Code
 
@@ -616,6 +685,7 @@ Host remains unchanged after VM deletion.
 
 - `scripts/agent-sandbox.fish`: convenience runner for Docker sandbox
 - `scripts/agent-sandbox-tools.fish`: runner for tool-preinstalled sandbox image
+- `scripts/macos-sandbox.fish`: optional local `sandbox-exec` wrapper (defense-in-depth)
 - `scripts/sandboxctl.fish`: unified command hub for sandbox scripts and tutorials
 - `scripts/brew-vm.fish`: disposable Tart VM wrapper for Homebrew installs
 - `examples/tart-brew-sandbox.md`: VM template assumptions for `brew-vm`
@@ -624,6 +694,8 @@ Host remains unchanged after VM deletion.
 - `scripts/llm-forgejo-keys.fish`: generate/revoke ephemeral Forgejo deploy keys (multi-instance)
 - `scripts/llm-radicle-access.fish`: manage ephemeral Radicle identities and RID bindings
 - `scripts/install-local-skills.fish`: install repo-versioned skills into local runtime
+- `scripts/install-fish-tools.fish`: install fish command shims (stow preferred, direct fallback)
+- `stow/fish-tools`: stow package for tool command shims under `.local/bin`
 - `skills/agent-sandbox-ops/SKILL.md`: operating workflow for sandbox + network controls
 - `skills/agent-key-lifecycle/SKILL.md`: operating workflow for key and identity lifecycle
 - `examples/forgejo-instances.example.json`: sample multi-instance Forgejo profile file

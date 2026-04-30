@@ -33,3 +33,9 @@ Dry run:
 ```fish
 scripts/install-local-skills.fish --dry-run
 ```
+
+Install fish tool shims (stow preferred, direct fallback):
+
+```fish
+scripts/install-fish-tools.fish install
+```

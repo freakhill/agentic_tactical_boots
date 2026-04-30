@@ -12,18 +12,20 @@ function __sandboxctl_usage
     echo "  scripts/sandboxctl.fish tutorial <topic>"
     echo "  scripts/sandboxctl.fish docker <args...>"
     echo "  scripts/sandboxctl.fish docker-tools <args...>"
+    echo "  scripts/sandboxctl.fish local <args...>"
     echo "  scripts/sandboxctl.fish brew-vm <args...>"
     echo "  scripts/sandboxctl.fish github <args...>"
     echo "  scripts/sandboxctl.fish forgejo <args...>"
     echo "  scripts/sandboxctl.fish radicle <args...>"
     echo ""
-    echo "Topics: docker, brew-vm, github-keys, forgejo-keys, radicle-access, network-limiting, file-sharing"
+    echo "Topics: docker, local, brew-vm, github-keys, forgejo-keys, radicle-access, network-limiting, file-sharing"
 end
 
 function __sandboxctl_list
     echo "Commands:"
     echo "  docker         -> scripts/agent-sandbox.fish (agent-sandbox ...)"
     echo "  docker-tools   -> scripts/agent-sandbox-tools.fish (agent-sandbox-tools ...)"
+    echo "  local          -> scripts/macos-sandbox.fish (macos-sandbox ...)"
     echo "  brew-vm        -> scripts/brew-vm.fish (brew-vm ...)"
     echo "  github         -> scripts/llm-github-keys.fish (llm-gh-key ...)"
     echo "  forgejo        -> scripts/llm-forgejo-keys.fish (llm-forgejo-key ...)"
@@ -40,6 +42,11 @@ function __sandboxctl_tutorial --argument-names topic
             echo "  scripts/sandboxctl.fish docker up"
             echo "  scripts/sandboxctl.fish docker shell"
             echo "  scripts/sandboxctl.fish docker down"
+        case local
+            echo "Local macOS sandbox quickstart (optional defense-in-depth):"
+            echo "  scripts/sandboxctl.fish local run --repo-root-access -- /bin/pwd"
+            echo "  scripts/sandboxctl.fish local run --network-policy strict-egress -- /usr/bin/curl -I https://example.com"
+            echo "  Prefer Docker/VM for stronger isolation when executing untrusted workflows."
         case brew-vm
             echo "Brew VM quickstart:"
             echo "  source scripts/brew-vm.fish"
@@ -100,6 +107,8 @@ switch "$cmd"
         fish -c "source '$script_dir/agent-sandbox.fish'; agent-sandbox $argv"
     case docker-tools
         fish -c "source '$script_dir/agent-sandbox-tools.fish'; agent-sandbox-tools $argv"
+    case local
+        fish -c "source '$script_dir/macos-sandbox.fish'; macos-sandbox $argv"
     case brew-vm
         fish -c "source '$script_dir/brew-vm.fish'; brew-vm $argv"
     case github
