@@ -1,0 +1,691 @@
+#!/usr/bin/env fish
+
+# Purpose:
+# - Mirror GitHub deploy-key lifecycle for Forgejo with multi-instance support.
+# - Keep credentials in env vars (token-env indirection), not CLI plaintext.
+# - Keep RO/RW key separation and easy revocation workflows.
+#
+# References:
+# - Forgejo docs: https://forgejo.org/docs/latest/
+# - Gitea/Forgejo repo keys API: https://docs.gitea.com/api/1.21/#tag/repository/operation/repoListKeys
+# - OpenSSH config: https://man.openbsd.org/ssh_config
+
+set -g LLM_FORGEJO_KEY_PREFIX "llm-agent"
+set -g LLM_FORGEJO_KEY_DIR "$HOME/.ssh"
+set -g LLM_FORGEJO_KEY_TTL "24h"
+set -g LLM_FORGEJO_CONFIG_DIR "$HOME/.config/llm-key-tools"
+set -g LLM_FORGEJO_INSTANCES_FILE "$LLM_FORGEJO_CONFIG_DIR/forgejo-instances.json"
+set -g LLM_FORGEJO_TEMPLATE_FILE (dirname (status filename))/../examples/forgejo-instances.example.json
+
+function __llm_forgejo_usage
+    echo "Usage:"
+    echo "  source scripts/llm-forgejo-keys.fish"
+    echo "  llm-forgejo-key instance-set --name <instance> --url <https://forgejo.example.com> --token-env <ENV_VAR>"
+    echo "  llm-forgejo-key instance-list"
+    echo "  llm-forgejo-key instance-remove --name <instance>"
+    echo "  llm-forgejo-key bootstrap-config [--force]"
+    echo "  llm-forgejo-key create --instance <name>|--forgejo-url <url> --repo owner/repo --access ro|rw [--ttl 24h] [--name label] [--token-env ENV]"
+    echo "  llm-forgejo-key create-pair --instance <name>|--forgejo-url <url> --repo owner/repo [--ttl 24h] [--name label] [--token-env ENV] [--install-ssh-config]"
+    echo "  llm-forgejo-key list --instance <name>|--forgejo-url <url> --repo owner/repo [--token-env ENV]"
+    echo "  llm-forgejo-key revoke --instance <name>|--forgejo-url <url> --repo owner/repo --id <key-id> [--token-env ENV]"
+    echo "  llm-forgejo-key revoke-by-title --instance <name>|--forgejo-url <url> --repo owner/repo --match <regex> [--token-env ENV] [--yes]"
+    echo "  llm-forgejo-key revoke-expired --instance <name>|--forgejo-url <url> --repo owner/repo [--token-env ENV] [--yes]"
+    echo "  llm-forgejo-key print-ssh-config --forgejo-url <url> --ro-key <path> --rw-key <path> [--host-prefix forgejo-llm]"
+    echo "  llm-forgejo-key install-ssh-config --repo owner/repo --name <label> --forgejo-url <url> --ro-key <path> --rw-key <path> [--host-prefix forgejo-llm]"
+    echo "  llm-forgejo-key uninstall-ssh-config [--repo owner/repo --name <label> | --marker <marker-regex>] [--yes]"
+    echo ""
+    echo "Notes:"
+    echo "  - Forgejo tokens are read from env var names, not plaintext args."
+    echo "  - Titles embed expiry as exp=<UTC-ISO8601>."
+end
+
+function __llm_forgejo_bootstrap_config --argument-names force
+    # Bootstrap keeps onboarding repeatable across hosts and CI runners.
+    if not test -f "$LLM_FORGEJO_TEMPLATE_FILE"
+        echo "Missing template file: $LLM_FORGEJO_TEMPLATE_FILE" 1>&2
+        return 1
+    end
+
+    mkdir -p "$LLM_FORGEJO_CONFIG_DIR"
+
+    if test -f "$LLM_FORGEJO_INSTANCES_FILE"; and test "$force" != "true"
+        echo "Config already exists: $LLM_FORGEJO_INSTANCES_FILE" 1>&2
+        echo "Use --force to overwrite from template." 1>&2
+        return 1
+    end
+
+    cp "$LLM_FORGEJO_TEMPLATE_FILE" "$LLM_FORGEJO_INSTANCES_FILE"
+    echo "Wrote Forgejo instance config template: $LLM_FORGEJO_INSTANCES_FILE"
+end
+
+function __llm_forgejo_require_tools
+    for tool in curl python3 ssh-keygen
+        if not command -sq "$tool"
+            echo "Missing required tool: $tool" 1>&2
+            return 1
+        end
+    end
+end
+
+function __llm_forgejo_validate_repo --argument-names repo
+    if not string match -rq '^[^/]+/[^/]+$' -- "$repo"
+        echo "Invalid --repo value. Expected owner/repo" 1>&2
+        return 1
+    end
+end
+
+function __llm_forgejo_ttl_to_iso --argument-names ttl
+    if not string match -rq '^[0-9]+[mhdw]$' -- "$ttl"
+        echo "Invalid --ttl '$ttl'. Use formats like 30m, 12h, 7d, 2w" 1>&2
+        return 1
+    end
+
+    python3 -c 'import datetime,re,sys; t=sys.argv[1]; n,u=re.fullmatch(r"(\d+)([mhdw])",t).groups(); n=int(n); m={"m":"minutes","h":"hours","d":"days","w":"weeks"}; dt=datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(**{m[u]:n}); print(dt.replace(microsecond=0).isoformat().replace("+00:00","Z"))' "$ttl"
+end
+
+function __llm_forgejo_repo_slug --argument-names repo
+    string replace -a '/' '-' -- "$repo"
+end
+
+function __llm_forgejo_host_from_url --argument-names url
+    python3 -c 'import sys,urllib.parse; u=urllib.parse.urlparse(sys.argv[1]); print(u.hostname or "")' "$url"
+end
+
+function __llm_forgejo_normalize_url --argument-names url
+    string replace -r '/+$' '' -- "$url"
+end
+
+function __llm_forgejo_ensure_instance_file
+    mkdir -p "$LLM_FORGEJO_CONFIG_DIR"
+    if not test -f "$LLM_FORGEJO_INSTANCES_FILE"
+        echo '{"instances":{}}' > "$LLM_FORGEJO_INSTANCES_FILE"
+    end
+end
+
+function __llm_forgejo_instance_set --argument-names name url token_env
+    if test -z "$name"; or test -z "$url"; or test -z "$token_env"
+        echo "instance-set requires --name, --url, and --token-env" 1>&2
+        return 1
+    end
+
+    __llm_forgejo_ensure_instance_file
+    set -l norm_url (__llm_forgejo_normalize_url "$url")
+
+    python3 -c 'import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+name, url, token_env = sys.argv[2], sys.argv[3], sys.argv[4]
+doc = json.loads(path.read_text())
+doc.setdefault("instances", {})[name] = {"url": url, "token_env": token_env}
+path.write_text(json.dumps(doc, indent=2) + "\n")
+' "$LLM_FORGEJO_INSTANCES_FILE" "$name" "$norm_url" "$token_env"
+
+    echo "Saved Forgejo instance profile: $name"
+    echo "  url: $norm_url"
+    echo "  token env: $token_env"
+end
+
+function __llm_forgejo_instance_list
+    __llm_forgejo_ensure_instance_file
+    python3 -c 'import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+doc = json.loads(path.read_text())
+inst = doc.get("instances", {})
+if not inst:
+    print("No Forgejo instance profiles configured.")
+    raise SystemExit(0)
+print("name\turl\ttoken_env")
+for name, cfg in sorted(inst.items()):
+    print("{}\t{}\t{}".format(name, cfg.get("url", ""), cfg.get("token_env", "")))
+' "$LLM_FORGEJO_INSTANCES_FILE"
+end
+
+function __llm_forgejo_instance_remove --argument-names name
+    if test -z "$name"
+        echo "instance-remove requires --name" 1>&2
+        return 1
+    end
+
+    __llm_forgejo_ensure_instance_file
+    python3 -c 'import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+name = sys.argv[2]
+doc = json.loads(path.read_text())
+inst = doc.get("instances", {})
+if name in inst:
+    del inst[name]
+    path.write_text(json.dumps(doc, indent=2) + "\n")
+    print(f"Removed Forgejo instance profile: {name}")
+else:
+    print(f"Instance profile not found: {name}")
+' "$LLM_FORGEJO_INSTANCES_FILE" "$name"
+end
+
+function __llm_forgejo_resolve_connection --argument-names instance forgejo_url token_env
+    # Resolve from profile or explicit URL, then fail closed if token missing.
+    set -l resolved_url ""
+    set -l resolved_env "$token_env"
+
+    if test -n "$forgejo_url"
+        set resolved_url (__llm_forgejo_normalize_url "$forgejo_url")
+        if test -z "$resolved_env"
+            set resolved_env "FORGEJO_TOKEN"
+        end
+    else
+        if test -z "$instance"
+            echo "Pass --instance <name> or --forgejo-url <url>" 1>&2
+            return 1
+        end
+
+        __llm_forgejo_ensure_instance_file
+        set -l line (python3 -c 'import json,pathlib,sys
+path=pathlib.Path(sys.argv[1])
+name=sys.argv[2]
+doc=json.loads(path.read_text())
+cfg=doc.get("instances",{}).get(name)
+if not cfg:
+    raise SystemExit(1)
+print((cfg.get("url") or "") + "\t" + (cfg.get("token_env") or ""))
+' "$LLM_FORGEJO_INSTANCES_FILE" "$instance")
+
+        if test $status -ne 0; or test -z "$line"
+            echo "Unknown instance profile: $instance" 1>&2
+            return 1
+        end
+
+        set -l parts (string split "\t" -- "$line")
+        set resolved_url "$parts[1]"
+        if test -z "$resolved_env"
+            set resolved_env "$parts[2]"
+        end
+        if test -z "$resolved_env"
+            set resolved_env "FORGEJO_TOKEN"
+        end
+    end
+
+    set resolved_url (__llm_forgejo_normalize_url "$resolved_url")
+    set -l host (__llm_forgejo_host_from_url "$resolved_url")
+    if test -z "$host"
+        echo "Invalid Forgejo URL: $resolved_url" 1>&2
+        return 1
+    end
+
+    set -l token $$resolved_env
+    if test -z "$token"
+        echo "Missing token in env var: $resolved_env" 1>&2
+        return 1
+    end
+
+    set -g __llm_forgejo_url "$resolved_url"
+    set -g __llm_forgejo_host "$host"
+    set -g __llm_forgejo_token_env "$resolved_env"
+    set -g __llm_forgejo_token "$token"
+end
+
+function __llm_forgejo_api --argument-names method path payload
+    set -l url "$__llm_forgejo_url/api/v1/$path"
+    set -l common_args \
+        -sS \
+        -X "$method" \
+        -H "Authorization: token $__llm_forgejo_token" \
+        -H "Accept: application/json"
+
+    if test -n "$payload"
+        curl $common_args -H "Content-Type: application/json" "$url" --data "$payload"
+    else
+        curl $common_args "$url"
+    end
+end
+
+function __llm_forgejo_generate_key --argument-names access name expiry
+    # ed25519 + higher KDF rounds for local key hardening.
+    set -l stamp (date -u +%Y%m%dT%H%M%SZ)
+    set -l safe_name (string replace -ra '[^a-zA-Z0-9._-]' '-' -- "$name")
+    set -l base "$LLM_FORGEJO_KEY_DIR/llm_agent_forgejo_"$access"_"$safe_name"_"$stamp
+    set -l title "$LLM_FORGEJO_KEY_PREFIX:forgejo:"$access":"$safe_name":exp="$expiry
+
+    if test -e "$base"; or test -e "$base.pub"
+        echo "Refusing to overwrite existing key files: $base" 1>&2
+        return 1
+    end
+
+    mkdir -p "$LLM_FORGEJO_KEY_DIR"
+    chmod 700 "$LLM_FORGEJO_KEY_DIR"
+
+    ssh-keygen -t ed25519 -a 100 -N "" -f "$base" -C "$title" >/dev/null
+    if test $status -ne 0
+        echo "ssh-keygen failed" 1>&2
+        return 1
+    end
+
+    set -g __llm_forgejo_last_key_path "$base"
+    set -g __llm_forgejo_last_key_title "$title"
+    set -g __llm_forgejo_last_key_pub (string trim -- (string collect < "$base.pub"))
+end
+
+function __llm_forgejo_create_deploy_key --argument-names repo title pub access
+    set -l read_only true
+    if test "$access" = "rw"
+        set read_only false
+    end
+
+    set -l payload (python3 -c 'import json,sys; print(json.dumps({"title":sys.argv[1],"key":sys.argv[2],"read_only":sys.argv[3]=="true"}))' "$title" "$pub" "$read_only")
+    set -l resp (__llm_forgejo_api POST "repos/$repo/keys" "$payload")
+    if test $status -ne 0
+        return 1
+    end
+
+    echo "$resp" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))'
+end
+
+function __llm_forgejo_create_one --argument-names repo access ttl name
+    if not contains -- "$access" ro rw
+        echo "Invalid --access '$access'. Use ro or rw" 1>&2
+        return 1
+    end
+
+    set -l expiry (__llm_forgejo_ttl_to_iso "$ttl")
+    if test $status -ne 0
+        return 1
+    end
+
+    __llm_forgejo_generate_key "$access" "$name" "$expiry"; or return 1
+
+    set -l key_path "$__llm_forgejo_last_key_path"
+    set -l title "$__llm_forgejo_last_key_title"
+    set -l pub "$__llm_forgejo_last_key_pub"
+
+    set -l key_id (__llm_forgejo_create_deploy_key "$repo" "$title" "$pub" "$access")
+    if test $status -ne 0; or test -z "$key_id"
+        echo "Failed to create Forgejo deploy key for $repo" 1>&2
+        return 1
+    end
+
+    echo "Created $access deploy key"
+    echo "  instance: $__llm_forgejo_url"
+    echo "  repo: $repo"
+    echo "  id: $key_id"
+    echo "  title: $title"
+    echo "  private key: $key_path"
+    echo "  public key: $key_path.pub"
+
+    switch "$access"
+        case ro
+            set -g __llm_forgejo_last_key_path_ro "$key_path"
+        case rw
+            set -g __llm_forgejo_last_key_path_rw "$key_path"
+    end
+end
+
+function __llm_forgejo_confirm --argument-names prompt no_prompt
+    if test "$no_prompt" = "true"
+        return 0
+    end
+
+    read -P "$prompt [y/N]: " answer
+    switch (string lower -- "$answer")
+        case y yes
+            return 0
+    end
+
+    echo "Cancelled."
+    return 1
+end
+
+function __llm_forgejo_list --argument-names repo
+    set -l resp (__llm_forgejo_api GET "repos/$repo/keys" "")
+    if test $status -ne 0
+        return 1
+    end
+
+    echo "$resp" | python3 -c 'import json,sys
+data=json.load(sys.stdin)
+for k in data:
+    acc="ro" if k.get("read_only",True) else "rw"
+    print("{}\t{}\t{}\t{}".format(k.get("id", ""), acc, k.get("created_at", ""), k.get("title", "")))
+'
+end
+
+function __llm_forgejo_revoke_by_ids --argument-names repo ids
+    if test (count $ids) -eq 0
+        echo "No matching keys found."
+        return 0
+    end
+
+    for id in $ids
+        __llm_forgejo_api DELETE "repos/$repo/keys/$id" "" >/dev/null
+        and echo "Revoked deploy key id=$id"
+    end
+end
+
+function __llm_forgejo_print_alias_block --argument-names host_alias host_name key_path
+    echo "Host $host_alias"
+    echo "  HostName $host_name"
+    echo "  User git"
+    echo "  IdentityFile $key_path"
+    echo "  IdentitiesOnly yes"
+    echo ""
+end
+
+function __llm_forgejo_render_config --argument-names host_name ro_key rw_key host_prefix
+    __llm_forgejo_print_alias_block "$host_prefix-ro" "$host_name" "$ro_key"
+    __llm_forgejo_print_alias_block "$host_prefix-rw" "$host_name" "$rw_key"
+end
+
+function __llm_forgejo_install_config --argument-names repo name host_name ro_key rw_key host_prefix
+    # Marker blocks let us remove aliases safely without touching other entries.
+    if test -z "$repo"; or test -z "$name"; or test -z "$host_name"
+        echo "install-ssh-config requires --repo, --name, and a resolvable Forgejo host" 1>&2
+        return 1
+    end
+
+    if not test -f "$ro_key"
+        echo "Missing --ro-key file: $ro_key" 1>&2
+        return 1
+    end
+
+    if not test -f "$rw_key"
+        echo "Missing --rw-key file: $rw_key" 1>&2
+        return 1
+    end
+
+    mkdir -p "$LLM_FORGEJO_KEY_DIR"
+    chmod 700 "$LLM_FORGEJO_KEY_DIR"
+
+    set -l config_file "$LLM_FORGEJO_KEY_DIR/config"
+    if not test -f "$config_file"
+        touch "$config_file"
+    end
+    chmod 600 "$config_file"
+
+    set -l stamp (date -u +%Y%m%dT%H%M%SZ)
+    set -l slug (__llm_forgejo_repo_slug "$repo")
+    set -l safe_name (string replace -ra '[^a-zA-Z0-9._-]' '-' -- "$name")
+    set -l marker "llm-forgejo-key:$slug:$safe_name:$stamp"
+
+    {
+        echo ""
+        echo "# BEGIN $marker"
+        __llm_forgejo_render_config "$host_name" "$ro_key" "$rw_key" "$host_prefix"
+        echo "# END $marker"
+    } >> "$config_file"
+
+    echo "Added SSH aliases to $config_file"
+    echo "  RO host alias: $host_prefix-ro"
+    echo "  RW host alias: $host_prefix-rw"
+    echo "  marker: $marker"
+end
+
+function __llm_forgejo_uninstall_config --argument-names repo name marker yes
+    set -l config_file "$LLM_FORGEJO_KEY_DIR/config"
+    if not test -f "$config_file"
+        echo "No SSH config file found at $config_file"
+        return 0
+    end
+
+    set -l pattern ""
+    if test -n "$marker"
+        set pattern "$marker"
+    else
+        set -l slug (__llm_forgejo_repo_slug "$repo")
+        set -l safe_name (string replace -ra '[^a-zA-Z0-9._-]' '-' -- "$name")
+        set pattern "^llm-forgejo-key:"$slug":"$safe_name":"
+    end
+
+    if not __llm_forgejo_confirm "Remove matching SSH config blocks from $config_file?" "$yes"
+        return 1
+    end
+
+    set -l result (python3 -c 'import pathlib,re,sys
+cfg=pathlib.Path(sys.argv[1])
+pattern=re.compile(sys.argv[2])
+lines=cfg.read_text().splitlines()
+out=[]
+skip=False
+removed=[]
+marker=""
+for line in lines:
+    if line.startswith("# BEGIN "):
+        m=line[len("# BEGIN "):].strip()
+        if pattern.search(m):
+            skip=True
+            marker=m
+            removed.append(m)
+            continue
+    if skip:
+        if marker and line.strip()==f"# END {marker}":
+            skip=False
+            marker=""
+        continue
+    out.append(line)
+cfg.write_text("\n".join(out).rstrip()+"\n" if out else "")
+print(len(removed))
+for m in removed:
+    print(m)
+' "$config_file" "$pattern")
+
+    if test "$result[1]" = "0"
+        echo "No matching SSH config blocks found."
+        return 0
+    end
+
+    echo "Removed $result[1] SSH config block(s) from $config_file"
+    for m in $result[2..-1]
+        echo "  - $m"
+    end
+end
+
+function llm-forgejo-key --description "Manage ephemeral Forgejo deploy keys for LLM agents"
+    if test (count $argv) -eq 0
+        __llm_forgejo_usage
+        return 1
+    end
+
+    set -l cmd "$argv[1]"
+    set -e argv[1]
+
+    if test "$cmd" = "-h"; or test "$cmd" = "--help"
+        __llm_forgejo_usage
+        return 0
+    end
+
+    set -l instance ""
+    set -l forgejo_url ""
+    set -l token_env ""
+    set -l repo ""
+    set -l access ""
+    set -l ttl "$LLM_FORGEJO_KEY_TTL"
+    set -l name "ephemeral"
+    set -l name_set "false"
+    set -l id ""
+    set -l pattern ""
+    set -l yes "false"
+    set -l host_prefix "forgejo-llm"
+    set -l ro_key ""
+    set -l rw_key ""
+    set -l install_config "false"
+    set -l marker ""
+    set -l force "false"
+
+    while test (count $argv) -gt 0
+        switch "$argv[1]"
+            case --name
+                set name "$argv[2]"
+                set name_set "true"
+                set -e argv[1..2]
+            case --instance
+                set instance "$argv[2]"
+                set -e argv[1..2]
+            case --forgejo-url
+                set forgejo_url "$argv[2]"
+                set -e argv[1..2]
+            case --url
+                set forgejo_url "$argv[2]"
+                set -e argv[1..2]
+            case --token-env
+                set token_env "$argv[2]"
+                set -e argv[1..2]
+            case --repo
+                set repo "$argv[2]"
+                set -e argv[1..2]
+            case --access
+                set access "$argv[2]"
+                set -e argv[1..2]
+            case --ttl
+                set ttl "$argv[2]"
+                set -e argv[1..2]
+            case --id
+                set id "$argv[2]"
+                set -e argv[1..2]
+            case --match
+                set pattern "$argv[2]"
+                set -e argv[1..2]
+            case --host-prefix
+                set host_prefix "$argv[2]"
+                set -e argv[1..2]
+            case --ro-key
+                set ro_key "$argv[2]"
+                set -e argv[1..2]
+            case --rw-key
+                set rw_key "$argv[2]"
+                set -e argv[1..2]
+            case --install-ssh-config
+                set install_config "true"
+                set -e argv[1]
+            case --marker
+                set marker "$argv[2]"
+                set -e argv[1..2]
+            case --yes
+                set yes "true"
+                set -e argv[1]
+            case --force
+                set force "true"
+                set -e argv[1]
+            case -h --help
+                __llm_forgejo_usage
+                return 0
+            case '*'
+                echo "Unknown argument: $argv[1]" 1>&2
+                return 1
+        end
+    end
+
+    switch "$cmd"
+        case instance-set
+            __llm_forgejo_require_tools; or return 1
+            __llm_forgejo_instance_set "$name" "$forgejo_url" "$token_env"
+
+        case bootstrap-config
+            __llm_forgejo_bootstrap_config "$force"
+
+        case instance-list
+            __llm_forgejo_require_tools; or return 1
+            __llm_forgejo_instance_list
+
+        case instance-remove
+            __llm_forgejo_require_tools; or return 1
+            __llm_forgejo_instance_remove "$name"
+
+        case create
+            __llm_forgejo_require_tools; or return 1
+            __llm_forgejo_validate_repo "$repo"; or return 1
+            __llm_forgejo_resolve_connection "$instance" "$forgejo_url" "$token_env"; or return 1
+            __llm_forgejo_create_one "$repo" "$access" "$ttl" "$name"
+
+        case create-pair
+            __llm_forgejo_require_tools; or return 1
+            __llm_forgejo_validate_repo "$repo"; or return 1
+            __llm_forgejo_resolve_connection "$instance" "$forgejo_url" "$token_env"; or return 1
+
+            __llm_forgejo_create_one "$repo" ro "$ttl" "$name"; or return 1
+            __llm_forgejo_create_one "$repo" rw "$ttl" "$name"; or return 1
+
+            if test "$install_config" = "true"
+                __llm_forgejo_install_config "$repo" "$name" "$__llm_forgejo_host" "$__llm_forgejo_last_key_path_ro" "$__llm_forgejo_last_key_path_rw" "$host_prefix"; or return 1
+            end
+
+            echo ""
+            echo "Use these remote URLs:"
+            echo "  git@"$host_prefix"-ro:$repo.git"
+            echo "  git@"$host_prefix"-rw:$repo.git"
+
+        case list
+            __llm_forgejo_require_tools; or return 1
+            __llm_forgejo_validate_repo "$repo"; or return 1
+            __llm_forgejo_resolve_connection "$instance" "$forgejo_url" "$token_env"; or return 1
+            echo "id\taccess\tcreated_at\ttitle"
+            __llm_forgejo_list "$repo"
+
+        case revoke
+            __llm_forgejo_require_tools; or return 1
+            __llm_forgejo_validate_repo "$repo"; or return 1
+            __llm_forgejo_resolve_connection "$instance" "$forgejo_url" "$token_env"; or return 1
+            __llm_forgejo_api DELETE "repos/$repo/keys/$id" "" >/dev/null
+            and echo "Revoked deploy key id=$id"
+
+        case revoke-by-title
+            __llm_forgejo_require_tools; or return 1
+            __llm_forgejo_validate_repo "$repo"; or return 1
+            __llm_forgejo_resolve_connection "$instance" "$forgejo_url" "$token_env"; or return 1
+
+            set -l keys_json (__llm_forgejo_api GET "repos/$repo/keys" "")
+            set -l ids (printf "%s\n" "$keys_json" | python3 -c 'import json,re,sys; p=re.compile(sys.argv[1]); data=json.load(sys.stdin); print("\n".join(str(k.get("id")) for k in data if p.search(k.get("title",""))))' "$pattern")
+            if not __llm_forgejo_confirm "Revoke matching deploy keys from $repo?" "$yes"
+                return 1
+            end
+            __llm_forgejo_revoke_by_ids "$repo" $ids
+
+        case revoke-expired
+            __llm_forgejo_require_tools; or return 1
+            __llm_forgejo_validate_repo "$repo"; or return 1
+            __llm_forgejo_resolve_connection "$instance" "$forgejo_url" "$token_env"; or return 1
+
+            set -l keys_json (__llm_forgejo_api GET "repos/$repo/keys" "")
+            set -l ids (printf "%s\n" "$keys_json" | python3 -c 'import datetime,json,re,sys; now=datetime.datetime.now(datetime.timezone.utc); data=json.load(sys.stdin); out=[]; rx=re.compile(r"(?:^|:)exp=([0-9T:\-]+Z)");
+for k in data:
+    m=rx.search(k.get("title",""))
+    if not m:
+        continue
+    exp=datetime.datetime.fromisoformat(m.group(1).replace("Z","+00:00"))
+    if exp <= now:
+        out.append(str(k.get("id")))
+print("\n".join(out))')
+            if not __llm_forgejo_confirm "Revoke expired deploy keys from $repo?" "$yes"
+                return 1
+            end
+            __llm_forgejo_revoke_by_ids "$repo" $ids
+
+        case print-ssh-config
+            __llm_forgejo_require_tools; or return 1
+            __llm_forgejo_resolve_connection "$instance" "$forgejo_url" "$token_env"; or return 1
+            if test -z "$ro_key"; or test -z "$rw_key"
+                echo "print-ssh-config requires --ro-key and --rw-key" 1>&2
+                return 1
+            end
+            __llm_forgejo_render_config "$__llm_forgejo_host" "$ro_key" "$rw_key" "$host_prefix"
+
+        case install-ssh-config
+            __llm_forgejo_require_tools; or return 1
+            __llm_forgejo_validate_repo "$repo"; or return 1
+            __llm_forgejo_resolve_connection "$instance" "$forgejo_url" "$token_env"; or return 1
+            if test -z "$ro_key"; or test -z "$rw_key"
+                echo "install-ssh-config requires --ro-key and --rw-key" 1>&2
+                return 1
+            end
+            __llm_forgejo_install_config "$repo" "$name" "$__llm_forgejo_host" "$ro_key" "$rw_key" "$host_prefix"
+
+        case uninstall-ssh-config
+            __llm_forgejo_require_tools; or return 1
+            if test -z "$marker"
+                if test -z "$repo"; or test "$name_set" != "true"
+                    echo "uninstall-ssh-config requires --marker OR both --repo and --name" 1>&2
+                    return 1
+                end
+            end
+            __llm_forgejo_uninstall_config "$repo" "$name" "$marker" "$yes"
+
+        case '*'
+            echo "Unknown command: $cmd" 1>&2
+            __llm_forgejo_usage
+            return 1
+    end
+end

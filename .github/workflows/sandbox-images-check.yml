@@ -1,0 +1,23 @@
+name: Sandbox Images Check
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-images:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build base sandbox image
+        run: docker compose -f examples/docker-compose.yml build agent
+
+      - name: Build tools sandbox image
+        run: docker compose --env-file examples/agent-tools.env -f examples/docker-compose.yml build agent-tools

@@ -1,0 +1,79 @@
+services:
+  proxy:
+    image: ubuntu/squid:5.2-22.04_beta
+    ports:
+      - "3128:3128"
+    volumes:
+      - ./squid.conf:/etc/squid/squid.conf:ro
+      - ./allowlist.domains:/etc/squid/allowlist.domains:ro
+    networks:
+      - sandbox_internal
+      - sandbox_egress
+
+  agent:
+    build:
+      context: ..
+      dockerfile: examples/Dockerfile.agent
+    image: local/agent-sandbox:latest
+    working_dir: /workspace
+    environment:
+      HTTP_PROXY: http://proxy:3128
+      HTTPS_PROXY: http://proxy:3128
+      NO_PROXY: localhost,127.0.0.1,proxy
+    volumes:
+      - ..:/workspace:rw
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    command: ["fish"]
+    networks:
+      - sandbox_internal
+
+  agent-tools:
+    build:
+      context: ..
+      dockerfile: examples/Dockerfile.agent.tools
+      args:
+        ENABLE_CLAUDE_CODE: ${ENABLE_CLAUDE_CODE:-false}
+        ENABLE_OPENCODE: ${ENABLE_OPENCODE:-false}
+        ENABLE_CREWAI: ${ENABLE_CREWAI:-true}
+        ENABLE_PYDANTICAI: ${ENABLE_PYDANTICAI:-true}
+        ENABLE_AG2: ${ENABLE_AG2:-true}
+        CLAUDE_CODE_NPM_PACKAGE: ${CLAUDE_CODE_NPM_PACKAGE:-@anthropic-ai/claude-code}
+        CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-2.1.121}
+        OPENCODE_NPM_PACKAGE: ${OPENCODE_NPM_PACKAGE:-opencode-ai}
+        OPENCODE_VERSION: ${OPENCODE_VERSION:-1.14.28}
+        CREWAI_VERSION: ${CREWAI_VERSION:-0.11.2}
+        PYDANTIC_AI_VERSION: ${PYDANTIC_AI_VERSION:-1.87.0}
+        PYDANTIC_AI_HARNESS_VERSION: ${PYDANTIC_AI_HARNESS_VERSION:-0.2.0}
+        AG2_VERSION: ${AG2_VERSION:-0.12.1}
+    image: local/agent-sandbox-tools:latest
+    working_dir: /workspace
+    environment:
+      HTTP_PROXY: http://proxy:3128
+      HTTPS_PROXY: http://proxy:3128
+      NO_PROXY: localhost,127.0.0.1,proxy
+    volumes:
+      - ..:/workspace:rw
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    command: ["fish"]
+    networks:
+      - sandbox_internal
+
+networks:
+  sandbox_internal:
+    internal: true
+  sandbox_egress:
+    driver: bridge
