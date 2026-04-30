@@ -8,7 +8,7 @@ Before making changes, agents must read:
 
 1. `CONTRIBUTING.md`
 2. `scripts/CONVENTIONS.md`
-3. `llm-agent-sandboxing.md`
+3. `README.md`
 4. Relevant skill files in `skills/`
 
 ## Required Behaviors
@@ -22,7 +22,7 @@ Before making changes, agents must read:
 
 Any script behavior/interface change requires matching updates in:
 
-- `llm-agent-sandboxing.md`
+- `README.md`
 - Affected skill files (`skills/*/SKILL.md`)
 - `skills/README.md` when usage/install guidance changes
 

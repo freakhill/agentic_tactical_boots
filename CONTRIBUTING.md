@@ -8,7 +8,7 @@ Before editing code or docs, read:
 
 1. `agents.md`
 2. `scripts/CONVENTIONS.md`
-3. `llm-agent-sandboxing.md`
+3. `README.md`
 
 ## Script Standards
 
@@ -21,7 +21,7 @@ Before editing code or docs, read:
 
 When changing any script under `scripts/` that affects behavior, flags, workflows, or defaults, update all relevant docs in the same change:
 
-- `llm-agent-sandboxing.md`
+- `README.md`
 - Related skill files under `skills/*/SKILL.md`
 - `skills/README.md` if install/use guidance changes
 

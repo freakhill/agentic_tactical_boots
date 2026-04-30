@@ -45,7 +45,7 @@ jobs:
           DOC_CHANGED=false
           SKILL_CHANGED=false
 
-          if printf '%s\n' "$CHANGED_FILES" | grep -Eq '^llm-agent-sandboxing\.md$'; then
+          if printf '%s\n' "$CHANGED_FILES" | grep -Eq '^README\.md$'; then
             DOC_CHANGED=true
           fi
 
@@ -56,7 +56,7 @@ jobs:
           if [[ "$DOC_CHANGED" != true || "$SKILL_CHANGED" != true ]]; then
             echo "Script change detected without required docs/skills updates." >&2
             echo "Required with scripts/*.fish changes:" >&2
-            echo "  - llm-agent-sandboxing.md" >&2
+            echo "  - README.md" >&2
             echo "  - skills/*/SKILL.md or skills/README.md" >&2
             exit 1
           fi

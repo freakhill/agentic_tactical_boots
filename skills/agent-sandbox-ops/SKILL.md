@@ -16,7 +16,7 @@ Before executing this skill, read:
 1. `CONTRIBUTING.md`
 2. `agents.md`
 3. `scripts/CONVENTIONS.md`
-4. `llm-agent-sandboxing.md`
+4. `README.md`
 
 ## Command map
 
@@ -63,7 +63,7 @@ Before executing this skill, read:
 
 If you change sandbox scripts or defaults, update in the same task:
 
-- `llm-agent-sandboxing.md`
+- `README.md`
 - this skill file
 - any other affected skill under `skills/*/SKILL.md`
 - `skills/README.md` when installation/usage guidance changes

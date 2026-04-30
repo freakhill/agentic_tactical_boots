@@ -12,7 +12,7 @@ Before updating any skill, read:
 
 When script behavior changes, keep skills and docs in sync in the same change:
 
-- `llm-agent-sandboxing.md`
+- `README.md`
 - affected `skills/*/SKILL.md`
 - this file when install/usage guidance changes
 
