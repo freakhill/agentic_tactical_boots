@@ -34,9 +34,19 @@ function __llm_rad_usage
     echo "  llm-radicle-access unbind-repo --rid <rid> [--identity-id <identity-id>] [--yes]"
     echo "  llm-radicle-access print-env --identity-id <identity-id>"
     echo ""
+    echo "Repo-aware shortcuts (infer --rid from cwd's git config rad.id or 'rad inspect'):"
+    echo "  llm-radicle-access here info"
+    echo "  llm-radicle-access here bind --identity-id <id> --access ro|rw [--note text]"
+    echo "  llm-radicle-access here unbind [--identity-id <id>] [--yes]"
+    echo "  llm-radicle-access here list-bindings"
+    echo ""
+    echo "TUI:"
+    echo "  llm-radicle-access tui                  (interactive launcher; requires gum)"
+    echo ""
     echo "Notes:"
     echo "  - This manages local ephemeral identities + repo bindings across many RIDs."
     echo "  - Radicle access control is delegate/policy based; this tool does not alter network delegates automatically."
+    echo "  - 'here' needs the cwd to be a Radicle-tracked repo (rad init has set git config rad.id, or 'rad inspect' is available)."
 end
 
 function __llm_rad_bootstrap_config --argument-names force
@@ -197,6 +207,144 @@ function __llm_rad_print_env --argument-names ident_id
     echo "set -x RADICLE_SSH_KEY $line"
 end
 
+# Infer the Radicle identifier (RID) of the cwd repo.
+# Strategy: try `git config --local rad.id` first (set by `rad init`); if that
+# fails, try `rad inspect` if the rad CLI is on PATH. Reads from $ATB_USER_PWD
+# first so the bin-shim dispatcher's cd doesn't break us.
+function __llm_rad_rid_from_repo
+    set -l cwd "$ATB_USER_PWD"
+    if test -z "$cwd"
+        set cwd "$PWD"
+    end
+
+    set -l rid (command git -C "$cwd" config --local --get rad.id 2>/dev/null)
+    if test -n "$rid"
+        echo "$rid"
+        return 0
+    end
+
+    if command -sq rad
+        # `rad inspect` prints metadata; the first line typically starts with
+        # the RID. Use --rid if available (newer rad), else fall back to head.
+        set rid (command rad inspect --rid 2>/dev/null | string trim)
+        if test -n "$rid"
+            echo "$rid"
+            return 0
+        end
+        set rid (command rad inspect 2>/dev/null | string match -r '^rad:[A-Za-z0-9]+' | head -n 1)
+        if test -n "$rid"
+            echo "$rid"
+            return 0
+        end
+    end
+
+    return 1
+end
+
+function __llm_rad_tui
+    if not command -sq gum
+        echo "Error: 'gum' is required for the interactive TUI (soft dependency)." 1>&2
+        echo "" 1>&2
+        echo "Install:" 1>&2
+        echo "  brew install gum" 1>&2
+        echo "  https://github.com/charmbracelet/gum#installation" 1>&2
+        echo "" 1>&2
+        echo "Or use the CLI directly. See: llm-radicle-access --help" 1>&2
+        return 1
+    end
+
+    set -l rid (__llm_rad_rid_from_repo)
+
+    while true
+        echo ""
+        gum style --bold --foreground 212 "Radicle access"
+        if test -n "$rid"
+            gum style --faint "current repo RID: $rid"
+        else
+            gum style --foreground 196 "no RID detected for cwd — repo-scoped actions disabled"
+        end
+        gum style --faint "(Esc on the menu to quit. Every action prints its equivalent CLI.)"
+        echo ""
+
+        set -l choice (gum choose \
+            "Create a new identity (24h TTL)" \
+            "List active identities" \
+            "Bind THIS repo to an identity" \
+            "Unbind THIS repo" \
+            "List bindings for THIS repo" \
+            "Retire expired identities" \
+            "Quit")
+
+        if test -z "$choice"
+            return 0
+        end
+
+        echo ""
+        switch "$choice"
+            case "Create*"
+                set -l name (gum input --placeholder "label (e.g. session-1)" --prompt "name › ")
+                if test -z "$name"
+                    continue
+                end
+                __llm_rad_show_cli "llm-radicle-access create-identity --name $name --ttl 24h"
+                if gum confirm --default=true "Create identity '$name'?"
+                    llm-radicle-access create-identity --name "$name" --ttl 24h
+                end
+            case "List active*"
+                __llm_rad_show_cli "llm-radicle-access list-identities"
+                llm-radicle-access list-identities
+            case "Bind*"
+                if test -z "$rid"
+                    gum style --foreground 196 "no RID for cwd; cannot bind"
+                    continue
+                end
+                set -l ident_id (gum input --placeholder "identity id (from list)" --prompt "identity-id › ")
+                if test -z "$ident_id"
+                    continue
+                end
+                set -l access (gum choose ro rw)
+                if test -z "$access"
+                    continue
+                end
+                __llm_rad_show_cli "llm-radicle-access here bind --identity-id $ident_id --access $access"
+                if gum confirm --default=true "Bind $rid to $ident_id ($access)?"
+                    llm-radicle-access here bind --identity-id "$ident_id" --access "$access"
+                end
+            case "Unbind*"
+                if test -z "$rid"
+                    gum style --foreground 196 "no RID for cwd; cannot unbind"
+                    continue
+                end
+                __llm_rad_show_cli "llm-radicle-access here unbind --yes"
+                if gum confirm --default=false "Unbind $rid for ALL identities?"
+                    llm-radicle-access here unbind --yes
+                end
+            case "List bindings*"
+                if test -z "$rid"
+                    gum style --foreground 196 "no RID for cwd; listing all bindings instead"
+                    __llm_rad_show_cli "llm-radicle-access list-bindings --all"
+                    llm-radicle-access list-bindings --all
+                else
+                    __llm_rad_show_cli "llm-radicle-access here list-bindings"
+                    llm-radicle-access here list-bindings
+                end
+            case "Retire expired*"
+                __llm_rad_show_cli "llm-radicle-access retire-expired --yes"
+                if gum confirm --default=true "Retire all expired identities?"
+                    llm-radicle-access retire-expired --yes
+                end
+            case "Quit"
+                return 0
+        end
+    end
+end
+
+function __llm_rad_show_cli --argument-names cmd
+    gum style --faint "Equivalent CLI:"
+    echo "  $cmd"
+    echo ""
+end
+
 function llm-radicle-access --description "Manage local ephemeral Radicle identities and repo bindings"
     if test (count $argv) -eq 0
         __llm_rad_usage
@@ -209,6 +357,53 @@ function llm-radicle-access --description "Manage local ephemeral Radicle identi
     if test "$cmd" = "-h"; or test "$cmd" = "--help"
         __llm_rad_usage
         return 0
+    end
+
+    if test "$cmd" = "tui"
+        __llm_rad_tui $argv
+        return $status
+    end
+
+    # `here` infers --rid from the cwd's Radicle metadata and falls through to
+    # the normal dispatcher. The `info` subcommand is local sugar that just
+    # prints the inferred RID and exits.
+    if test "$cmd" = "here"
+        if test (count $argv) -eq 0
+            echo "Error: 'here' requires a subcommand." 1>&2
+            echo "" 1>&2
+            echo "Available 'here' subcommands:" 1>&2
+            echo "  info, bind, unbind, list-bindings" 1>&2
+            return 1
+        end
+
+        set cmd "$argv[1]"
+        set -e argv[1]
+
+        set -l inferred_rid (__llm_rad_rid_from_repo)
+        if test -z "$inferred_rid"
+            echo "Error: could not infer Radicle RID from $PWD." 1>&2
+            echo "  Tried: git config --local rad.id, then 'rad inspect'." 1>&2
+            echo "  Workaround: invoke the underlying subcommand with --rid <rad:...>." 1>&2
+            return 1
+        end
+
+        switch "$cmd"
+            case info
+                echo "$inferred_rid"
+                return 0
+            case bind
+                set cmd bind-repo
+                set argv --rid "$inferred_rid" $argv
+            case unbind
+                set cmd unbind-repo
+                set argv --rid "$inferred_rid" $argv
+            case list-bindings
+                set argv --rid "$inferred_rid" $argv
+            case '*'
+                echo "Error: unknown 'here' subcommand: $cmd" 1>&2
+                echo "Available: info, bind, unbind, list-bindings" 1>&2
+                return 1
+        end
     end
 
     set -l name ""

@@ -62,4 +62,61 @@ function test_print_env_requires_id
     assert_contains "llm-radicle-access print-env message" "$out" "--identity-id"
 end
 
+function test_help_advertises_here_and_tui
+    set -l out (__invoke --help)
+    assert_contains "llm-radicle-access help mentions here" "$out" "here info"
+    assert_contains "llm-radicle-access help mentions tui" "$out" "llm-radicle-access tui"
+end
+
+function test_here_requires_subcommand
+    set -l out (__invoke here)
+    set -l rc $status
+    assert_eq "llm-radicle-access here no-sub fails" $rc 1
+    assert_contains "llm-radicle-access here no-sub message" "$out" "requires a subcommand"
+end
+
+function test_here_outside_radicle_repo_fails
+    set -l tmp (mk_tmpdir)
+    set -l body "
+        cd '$tmp'
+        command git init -q
+        source '$SCRIPT'
+        llm-radicle-access here info
+    "
+    set -l out (command fish -c "$body" 2>&1)
+    set -l rc $status
+    assert_eq "llm-radicle-access here outside-radicle fails" $rc 1
+    assert_contains "llm-radicle-access here outside-radicle message" "$out" "could not infer Radicle RID"
+end
+
+function test_here_info_returns_inferred_rid
+    set -l tmp (mk_tmpdir)
+    set -l body "
+        cd '$tmp'
+        command git init -q
+        command git config --local rad.id 'rad:z3test123'
+        source '$SCRIPT'
+        llm-radicle-access here info
+    "
+    set -l out (command fish -c "$body" 2>&1)
+    set -l rc $status
+    assert_status "llm-radicle-access here info status" $rc 0
+    assert_contains "llm-radicle-access here info prints rid" "$out" "rad:z3test123"
+end
+
+function test_tui_without_gum_prints_install_hint
+    set -l tmp (mk_tmpdir)
+    mkdir -p "$tmp/bin"
+    set -l body "
+        set -x PATH '$tmp/bin'
+        source '$SCRIPT'
+        llm-radicle-access tui
+    "
+    set -l out (command fish -N -c "$body" 2>&1)
+    set -l rc $status
+    assert_eq "llm-radicle-access tui no-gum fails" $rc 1
+    assert_contains "llm-radicle-access tui no-gum mentions gum" "$out" "gum"
+    assert_contains "llm-radicle-access tui no-gum suggests brew install" "$out" "brew install gum"
+end
+
 run_tests_in_file (basename (status filename))
