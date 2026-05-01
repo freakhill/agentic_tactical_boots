@@ -98,6 +98,27 @@ def cmd_instance_get(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_instance_by_host(args: argparse.Namespace) -> int:
+    """Find the first instance profile whose URL host matches.
+
+    Used by the fish wrapper's `here` shortcut: given the host parsed from
+    the cwd's git origin, return the instance name + url + token_env so the
+    user does not have to type --instance.
+    """
+    from urllib.parse import urlparse
+
+    path = Path(args.config_file)
+    doc = _read_doc(path)
+    target = args.host.lower()
+    for name, cfg in (doc.get("instances", {}) or {}).items():
+        url = cfg.get("url") or ""
+        host = (urlparse(url).hostname or "").lower()
+        if host == target:
+            print(name + "\t" + url + "\t" + (cfg.get("token_env") or ""))
+            return 0
+    return 1
+
+
 def cmd_make_payload(args: argparse.Namespace) -> int:
     print(json.dumps({"title": args.title, "key": args.key, "read_only": args.read_only == "true"}))
     return 0
@@ -200,6 +221,11 @@ def main(argv: list[str] | None = None) -> int:
     p_iget.add_argument("config_file")
     p_iget.add_argument("name")
     p_iget.set_defaults(func=cmd_instance_get)
+
+    p_ibh = sub.add_parser("instance-by-host")
+    p_ibh.add_argument("config_file")
+    p_ibh.add_argument("host")
+    p_ibh.set_defaults(func=cmd_instance_by_host)
 
     p_mp = sub.add_parser("make-payload")
     p_mp.add_argument("title")

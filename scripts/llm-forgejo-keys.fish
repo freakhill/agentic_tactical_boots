@@ -36,9 +36,21 @@ function __llm_forgejo_usage
     echo "  llm-forgejo-key install-ssh-config --repo owner/repo --name <label> --forgejo-url <url> --ro-key <path> --rw-key <path> [--host-prefix forgejo-llm]"
     echo "  llm-forgejo-key uninstall-ssh-config [--repo owner/repo --name <label> | --marker <marker-regex>] [--yes]"
     echo ""
+    echo "Repo-aware shortcuts (infer --instance and --repo from cwd's git origin):"
+    echo "  llm-forgejo-key here create-pair [--ttl 24h] [--name label] [--no-install-config]"
+    echo "  llm-forgejo-key here list"
+    echo "  llm-forgejo-key here revoke <key-id>"
+    echo "  llm-forgejo-key here cleanup            (revoke-expired --yes for current repo)"
+    echo "  llm-forgejo-key here revoke-all         (revoke-by-title '^$LLM_FORGEJO_KEY_PREFIX:' --yes)"
+    echo ""
+    echo "TUI:"
+    echo "  llm-forgejo-key tui                     (interactive launcher; requires gum)"
+    echo ""
     echo "Notes:"
     echo "  - Forgejo tokens are read from env var names, not plaintext args."
     echo "  - Titles embed expiry as exp=<UTC-ISO8601>."
+    echo "  - 'here' looks up the matching instance profile by host. Run"
+    echo "    'llm-forgejo-key bootstrap-config' then 'instance-set' first."
 end
 
 function __llm_forgejo_bootstrap_config --argument-names force
@@ -320,6 +332,163 @@ function __llm_forgejo_revoke_by_ids --argument-names repo ids
     end
 end
 
+# Infer (host, owner/repo) from the current working directory's git origin.
+# Echoes two lines: host on line 1, owner/repo on line 2. Returns 1 on
+# failure. Reads from $ATB_USER_PWD first (set by the bin-shim dispatcher
+# before it cds into the agentic_tactical_boots repo) and falls back to $PWD.
+function __llm_forgejo_repo_from_git
+    set -l cwd "$ATB_USER_PWD"
+    if test -z "$cwd"
+        set cwd "$PWD"
+    end
+    set -l url (command git -C "$cwd" remote get-url origin 2>/dev/null)
+    if test -z "$url"
+        return 1
+    end
+
+    set -l u "$url"
+    set u (string replace -r '\.git$' '' -- "$u")
+    set u (string replace -r '^ssh://' '' -- "$u")
+    set u (string replace -r '^[^@/]+@' '' -- "$u")
+    set u (string replace -r '^https?://' '' -- "$u")
+
+    set -l groups (string match -r '^([^:/]+)[:/](.+)$' -- "$u")
+    if test (count $groups) -lt 3
+        return 1
+    end
+    set -l host "$groups[2]"
+    set -l rest "$groups[3]"
+
+    if not string match -rq '^[^/]+/[^/]+$' -- "$rest"
+        return 1
+    end
+
+    # Resolve forgejo-* ssh-config aliases via `ssh -G` so users with custom
+    # alias hosts still get a usable real hostname.
+    if string match -q 'forgejo-*' -- "$host"
+        set -l real_host (command ssh -G "$host" 2>/dev/null | string match -r '^hostname (.+)$' | string replace -r '^hostname ' '')
+        if test -n "$real_host[2]"
+            set host "$real_host[2]"
+        end
+    end
+
+    echo "$host"
+    echo "$rest"
+end
+
+function __llm_forgejo_default_name
+    set -l cwd "$ATB_USER_PWD"
+    if test -z "$cwd"
+        set cwd "$PWD"
+    end
+    set -l short_sha (command git -C "$cwd" rev-parse --short=7 HEAD 2>/dev/null)
+    if test -z "$short_sha"
+        set short_sha "no-sha"
+    end
+    set -l stamp (date -u +%Y%m%d)
+    echo "auto-$short_sha-$stamp"
+end
+
+# Given a host, return a tab-separated "instance_name<TAB>url<TAB>token_env"
+# row from the saved profiles, or empty if no profile matches.
+function __llm_forgejo_instance_for_host --argument-names host
+    __llm_forgejo_ensure_instance_file
+    uv run --script "$LLM_FORGEJO_PY" instance-by-host "$LLM_FORGEJO_INSTANCES_FILE" "$host"
+end
+
+function __llm_forgejo_tui
+    if not command -sq gum
+        echo "Error: 'gum' is required for the interactive TUI (soft dependency)." 1>&2
+        echo "" 1>&2
+        echo "Install:" 1>&2
+        echo "  brew install gum" 1>&2
+        echo "  https://github.com/charmbracelet/gum#installation" 1>&2
+        echo "" 1>&2
+        echo "Or use the CLI directly. See: llm-forgejo-key --help" 1>&2
+        return 1
+    end
+
+    set -l inferred (__llm_forgejo_repo_from_git)
+    if test (count $inferred) -ne 2
+        echo "Error: not in a git repo with a recognized origin." 1>&2
+        echo "  Use the CLI explicitly: llm-forgejo-key <subcommand> --instance <name> --repo owner/repo ..." 1>&2
+        return 1
+    end
+    set -l host "$inferred[1]"
+    set -l repo "$inferred[2]"
+    set -l profile (__llm_forgejo_instance_for_host "$host")
+    set -l instance_name ""
+    if test -n "$profile"
+        set instance_name (string split "\t" -- "$profile")[1]
+    end
+
+    while true
+        echo ""
+        gum style --bold --foreground 212 "Forgejo deploy keys → $repo @ $host"
+        if test -n "$instance_name"
+            gum style --faint "instance profile: $instance_name"
+        else
+            gum style --foreground 196 "no instance profile saved for $host — use `llm-forgejo-key instance-set` first"
+        end
+        gum style --faint "(Esc on the menu to quit. Every action prints its equivalent CLI.)"
+        echo ""
+
+        set -l action (gum choose \
+            "Create RO+RW pair (24h, install ssh config)" \
+            "List current deploy keys" \
+            "Revoke a key by id" \
+            "Revoke ALL llm-agent keys for this repo" \
+            "Cleanup expired keys" \
+            "Quit")
+
+        if test -z "$action"
+            return 0
+        end
+
+        echo ""
+        switch "$action"
+            case "Create RO+RW*"
+                __llm_forgejo_show_cli "llm-forgejo-key here create-pair"
+                if gum confirm --default=true "Create RO+RW pair for $repo?"
+                    llm-forgejo-key here create-pair
+                end
+            case "List*"
+                __llm_forgejo_show_cli "llm-forgejo-key here list"
+                llm-forgejo-key here list
+            case "Revoke a key*"
+                set -l id (gum input --placeholder "deploy key id (numeric)" --prompt "key id › ")
+                if test -z "$id"
+                    continue
+                end
+                if not string match -rq '^[0-9]+$' -- "$id"
+                    gum style --foreground 196 "Not a numeric id: $id"
+                    continue
+                end
+                __llm_forgejo_show_cli "llm-forgejo-key here revoke $id"
+                if gum confirm --default=false "Revoke key $id from $repo?"
+                    llm-forgejo-key here revoke "$id"
+                end
+            case "Revoke ALL*"
+                gum style --foreground 196 --bold "DESTRUCTIVE: removes every deploy key whose title starts with '$LLM_FORGEJO_KEY_PREFIX:' on $repo."
+                __llm_forgejo_show_cli "llm-forgejo-key here revoke-all"
+                if gum confirm --default=false "Really revoke ALL '$LLM_FORGEJO_KEY_PREFIX:' deploy keys for $repo?"
+                    llm-forgejo-key here revoke-all
+                end
+            case "Cleanup*"
+                __llm_forgejo_show_cli "llm-forgejo-key here cleanup"
+                llm-forgejo-key here cleanup
+            case "Quit"
+                return 0
+        end
+    end
+end
+
+function __llm_forgejo_show_cli --argument-names cmd
+    gum style --faint "Equivalent CLI:"
+    echo "  $cmd"
+    echo ""
+end
+
 function __llm_forgejo_print_alias_block --argument-names host_alias host_name key_path
     echo "Host $host_alias"
     echo "  HostName $host_name"
@@ -423,6 +592,99 @@ function llm-forgejo-key --description "Manage ephemeral Forgejo deploy keys for
     if test "$cmd" = "-h"; or test "$cmd" = "--help"
         __llm_forgejo_usage
         return 0
+    end
+
+    if test "$cmd" = "tui"
+        __llm_forgejo_tui $argv
+        return $status
+    end
+
+    # `here` infers --instance and --repo from the cwd's git origin and an
+    # entry in the saved instance profiles, then falls through to the normal
+    # dispatcher. Aliases: cleanup → revoke-expired --yes, revoke-all →
+    # revoke-by-title --match '^llm-agent:' --yes.
+    if test "$cmd" = "here"
+        if test (count $argv) -eq 0
+            echo "Error: 'here' requires a subcommand." 1>&2
+            echo "" 1>&2
+            echo "Available 'here' subcommands:" 1>&2
+            echo "  create-pair, list, revoke <id>, cleanup, revoke-all" 1>&2
+            return 1
+        end
+
+        set cmd "$argv[1]"
+        set -e argv[1]
+
+        set -l inferred (__llm_forgejo_repo_from_git)
+        if test (count $inferred) -ne 2
+            echo "Error: could not infer repo from $PWD." 1>&2
+            echo "  Tried: git -C \$PWD remote get-url origin" 1>&2
+            echo "  Workaround: invoke the underlying subcommand with --instance <name> --repo owner/repo." 1>&2
+            return 1
+        end
+        set -l host "$inferred[1]"
+        set -l inferred_repo "$inferred[2]"
+
+        set -l profile (__llm_forgejo_instance_for_host "$host")
+        if test -z "$profile"
+            echo "Error: no Forgejo instance profile matches host '$host'." 1>&2
+            echo "" 1>&2
+            echo "Add one with:" 1>&2
+            echo "  llm-forgejo-key bootstrap-config" 1>&2
+            echo "  llm-forgejo-key instance-set --name <label> --url https://$host --token-env <ENV>" 1>&2
+            return 1
+        end
+        set -l parts (string split "\t" -- "$profile")
+        set -l inferred_instance "$parts[1]"
+
+        set -l prepend --instance "$inferred_instance" --repo "$inferred_repo"
+        set -l strip_install_config "false"
+
+        switch "$cmd"
+            case create-pair
+                set -a prepend --install-ssh-config
+                set -a prepend --name (__llm_forgejo_default_name)
+            case list
+                # No extras.
+            case revoke
+                if test (count $argv) -ge 1; and string match -rq '^[0-9]+$' -- "$argv[1]"
+                    set -a prepend --id "$argv[1]"
+                    set -e argv[1]
+                end
+            case cleanup
+                set cmd revoke-expired
+                set -a prepend --yes
+            case revoke-all
+                set cmd revoke-by-title
+                set -a prepend --match '^'$LLM_FORGEJO_KEY_PREFIX':' --yes
+            case '*'
+                echo "Error: unknown 'here' subcommand: $cmd" 1>&2
+                echo "Available: create-pair, list, revoke <id>, cleanup, revoke-all" 1>&2
+                return 1
+        end
+
+        set -l filtered
+        for a in $argv
+            if test "$a" = "--no-install-config"
+                set strip_install_config "true"
+                continue
+            end
+            set -a filtered "$a"
+        end
+        set argv $filtered
+
+        if test "$strip_install_config" = "true"
+            set -l p2
+            for a in $prepend
+                if test "$a" = "--install-ssh-config"
+                    continue
+                end
+                set -a p2 "$a"
+            end
+            set prepend $p2
+        end
+
+        set argv $prepend $argv
     end
 
     set -l instance ""

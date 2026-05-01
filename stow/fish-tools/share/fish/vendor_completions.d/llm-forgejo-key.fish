@@ -1,7 +1,11 @@
 # managed-by: agentic_tactical_boots/install-fish-tools
 
 complete -c llm-forgejo-key -f
-complete -c llm-forgejo-key -n '__fish_use_subcommand' -a 'instance-set bootstrap-config instance-list instance-remove create create-pair list revoke revoke-by-title revoke-expired print-ssh-config install-ssh-config uninstall-ssh-config help'
+complete -c llm-forgejo-key -n '__fish_use_subcommand' -a 'instance-set bootstrap-config instance-list instance-remove create create-pair list revoke revoke-by-title revoke-expired print-ssh-config install-ssh-config uninstall-ssh-config here tui help'
+complete -c llm-forgejo-key -n '__fish_seen_subcommand_from here' -a 'create-pair list revoke cleanup revoke-all'
+complete -c llm-forgejo-key -n '__fish_seen_subcommand_from here' -l no-install-config
+complete -c llm-forgejo-key -n '__fish_seen_subcommand_from here' -l ttl -r
+complete -c llm-forgejo-key -n '__fish_seen_subcommand_from here' -l name -r
 complete -c llm-forgejo-key -n '__fish_seen_subcommand_from instance-set instance-remove create create-pair list revoke revoke-by-title revoke-expired' -l instance -r
 complete -c llm-forgejo-key -n '__fish_seen_subcommand_from create create-pair list revoke revoke-by-title revoke-expired install-ssh-config uninstall-ssh-config' -l repo -r
 complete -c llm-forgejo-key -n '__fish_seen_subcommand_from create create-pair' -l access -xa 'ro rw'
