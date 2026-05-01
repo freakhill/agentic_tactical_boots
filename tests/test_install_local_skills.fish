@@ -22,8 +22,8 @@ function test_unknown_argument_fails
 end
 
 function test_dry_run_does_not_write
-    # Run with HOME pointed at a tmp dir so dst_dir = $tmp/.claude/skills
-    set -l tmp (mktemp -d)
+    # Run with HOME pointed at a tmp dir so dst_dir = $tmp/.claude/skills.
+    set -l tmp (mk_tmpdir)
     set -l out (env HOME=$tmp $FISH_BIN $SCRIPT --dry-run 2>&1)
     set -l rc $status
 
@@ -37,7 +37,6 @@ function test_dry_run_does_not_write
             end
         end
     end
-    rm -rf "$tmp"
 
     assert_status "install-local-skills --dry-run status" $rc 0
     assert_eq "install-local-skills --dry-run wrote no skill dirs" $copied 0
@@ -45,7 +44,7 @@ function test_dry_run_does_not_write
 end
 
 function test_real_install_copies_skill_dirs
-    set -l tmp (mktemp -d)
+    set -l tmp (mk_tmpdir)
     set -l out (env HOME=$tmp $FISH_BIN $SCRIPT 2>&1)
     set -l rc $status
 
@@ -58,7 +57,6 @@ function test_real_install_copies_skill_dirs
             end
         end
     end
-    rm -rf "$tmp"
 
     assert_status "install-local-skills install status" $rc 0
     # The repo ships at least one skill dir (agent-sandbox-ops, agent-key-lifecycle).

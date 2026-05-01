@@ -46,18 +46,17 @@ end
 function test_status_does_not_modify_target
     # `status` should be read-only; running it against an empty target should not
     # create wrappers. Use a fresh temp dir.
-    set -l tmp (mktemp -d)
+    set -l tmp (mk_tmpdir)
     set -l before (find $tmp -mindepth 1 2>/dev/null | wc -l | string trim)
     set -l out (run_fish $SCRIPT status --target $tmp 2>&1)
     set -l rc $status
     set -l after (find $tmp -mindepth 1 2>/dev/null | wc -l | string trim)
-    rm -rf $tmp
     assert_status "install-fish-tools status status" $rc 0
     assert_eq "install-fish-tools status did not write" "$after" "$before"
 end
 
 function test_install_dry_run_creates_no_wrappers
-    set -l tmp (mktemp -d)
+    set -l tmp (mk_tmpdir)
     set -l out (run_fish $SCRIPT install --target $tmp --dry-run 2>&1)
     set -l rc $status
     # In dry-run, no wrapper files should appear in $tmp/.local/bin.
@@ -68,7 +67,6 @@ function test_install_dry_run_creates_no_wrappers
             set created 0
         end
     end
-    rm -rf $tmp
     assert_status "install-fish-tools install --dry-run status" $rc 0
     assert_eq "install-fish-tools dry-run created nothing" $created 0
 end

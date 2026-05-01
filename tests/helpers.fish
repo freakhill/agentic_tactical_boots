@@ -8,6 +8,30 @@ set -g __TEST_PASSED 0
 set -g __TEST_FAILED 0
 set -g __TEST_FAIL_LOG
 
+# Cleanup state. Tests register tmpdirs (and other paths) to remove via
+# `test_mktemp_dir` / `register_cleanup_path`. The fish_exit handler below
+# guarantees they are removed even when a test errors out before its inline
+# cleanup, similar to a bash `trap ... EXIT` pattern.
+set -g __TEST_CLEANUP_PATHS
+set -g __TEST_INITIAL_PWD $PWD
+
+# fish has no `trap` builtin; --on-event fish_exit is the supported equivalent.
+# Reference: https://fishshell.com/docs/current/cmds/function.html
+function __test_cleanup_on_exit --on-event fish_exit
+    # Restore cwd in case a test pushd'd somewhere and never popped (e.g. it
+    # errored between pushd and popd). Without this, a leaked cwd can confuse
+    # subsequent tests in the same fish process.
+    if test -d "$__TEST_INITIAL_PWD"
+        cd "$__TEST_INITIAL_PWD"
+    end
+
+    for p in $__TEST_CLEANUP_PATHS
+        if test -e "$p"
+            rm -rf "$p"
+        end
+    end
+end
+
 set -g REPO_ROOT (cd (dirname (status filename))/..; pwd)
 set -g SCRIPTS_DIR "$REPO_ROOT/scripts"
 
@@ -20,6 +44,37 @@ set -g FISH_BIN (command -v fish)
 
 function run_fish
     $FISH_BIN $argv
+end
+
+# Create a tmp dir and register it for cleanup at fish exit. Use this instead
+# of bare `mktemp -d` in tests so a failed assertion or an exception does not
+# leak directories into $TMPDIR.
+#
+# The name deliberately does NOT start with `test_` because the runner
+# discovers tests by matching `^test_.*$` over every defined function — a
+# helper named `test_*` would be picked up and run as a test.
+function mk_tmpdir
+    set -l tmp (mktemp -d)
+    set -a __TEST_CLEANUP_PATHS "$tmp"
+    echo "$tmp"
+end
+
+# Register an arbitrary path (file or directory) for removal at fish exit.
+function register_cleanup_path --argument-names path
+    set -a __TEST_CLEANUP_PATHS "$path"
+end
+
+# Run `body` inside `dir` with cwd safely restored regardless of outcome.
+# Usage: with_cwd <dir> <function-name-with-no-args>
+# The body function must be defined and take no arguments.
+function with_cwd --argument-names dir body
+    set -l saved $PWD
+    cd "$dir"
+    or return 1
+    eval $body
+    set -l rc $status
+    cd "$saved"
+    return $rc
 end
 
 function __test_record_pass --argument-names name
@@ -109,14 +164,30 @@ function run_tests_in_file
     end
     echo "=== $file_label ==="
 
-    set -l names (functions --names | string match -r '^test_.*$')
+    # Discover by `^test_` prefix while explicitly skipping known helpers, so a
+    # mis-named helper does not get invoked as a test.
+    set -l skip_helpers
+    set -l names
+    for fn in (functions --names | string match -r '^test_.*$')
+        if contains -- "$fn" $skip_helpers
+            continue
+        end
+        set -a names $fn
+    end
     if test (count $names) -eq 0
         echo "  (no tests defined)"
         return 0
     end
 
+    # Restore cwd between tests so a test that leaves the working directory
+    # somewhere unexpected (whether by error or design) does not contaminate
+    # the next test in the same file.
+    set -l between_test_pwd $PWD
     for name in $names
         eval $name
+        if test -d "$between_test_pwd"; and test "$PWD" != "$between_test_pwd"
+            cd "$between_test_pwd"
+        end
     end
 
     if test $__TEST_FAILED -gt 0

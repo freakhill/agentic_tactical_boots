@@ -28,25 +28,25 @@ function test_passes_against_repo_fixtures
     # examples/agent-tools.env is gitignored (it's a copy of .example for local
     # use). Make the happy path hermetic by staging all four required files in
     # a tmp dir, using the .example contents to seed the .env file.
-    set -l tmp (mktemp -d)
+    set -l tmp (mk_tmpdir)
     mkdir -p "$tmp/examples"
     cp "$REPO_ROOT/examples/agent-tools.env.example" "$tmp/examples/agent-tools.env.example"
     cp "$REPO_ROOT/examples/agent-tools.env.example" "$tmp/examples/agent-tools.env"
     cp "$REPO_ROOT/examples/Dockerfile.agent.tools"   "$tmp/examples/Dockerfile.agent.tools"
     cp "$REPO_ROOT/examples/docker-compose.yml"       "$tmp/examples/docker-compose.yml"
 
-    pushd "$tmp" >/dev/null
+    set -l saved $PWD
+    cd "$tmp"
     set -l out (run_fish $CHECK 2>&1)
     set -l rc $status
-    popd >/dev/null
-    rm -rf "$tmp"
+    cd "$saved"
 
     assert_status "check-pinning passes on staged fixtures" $rc 0
     assert_contains "check-pinning success message" "$out" "pinning check passed"
 end
 
 function test_detects_unpinned_latest_in_env
-    set -l tmp (mktemp -d)
+    set -l tmp (mk_tmpdir)
     mkdir -p "$tmp/examples"
     # Copy real reference files to keep the rest of the check satisfied.
     cp "$REPO_ROOT/examples/Dockerfile.agent.tools" "$tmp/examples/"
@@ -55,11 +55,11 @@ function test_detects_unpinned_latest_in_env
     echo "CLAUDE_CODE_VERSION=latest" > "$tmp/examples/agent-tools.env"
     echo "CLAUDE_CODE_VERSION=latest" > "$tmp/examples/agent-tools.env.example"
 
-    pushd "$tmp" >/dev/null
+    set -l saved $PWD
+    cd "$tmp"
     set -l out (run_fish $CHECK 2>&1)
     set -l rc $status
-    popd >/dev/null
-    rm -rf "$tmp"
+    cd "$saved"
 
     assert_eq "check-pinning fails on latest" $rc 1
     assert_contains "check-pinning reports failure reason" "$out" "unpinned"

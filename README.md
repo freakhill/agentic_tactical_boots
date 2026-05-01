@@ -139,13 +139,101 @@ Default stance: no installer network except approved registries, no installer sc
 
 ### Capability matrix (macOS)
 
-| Framework | File restrictions | SSH key restrictions | URL restrictions | Installer restrictions | Enforcement level |
-|---|---|---|---|---|---|
-| Claude Code | Yes (`/sandbox` filesystem policy) | Yes (`denyRead` on `~/.ssh`) | Yes (managed domain filtering/proxy) | Indirect via command policy + environment | OS-level sandbox + app policy |
-| OpenCode | Yes (permission rules, app-level) | Yes (pattern deny, app-level) | Partial (`webfetch/websearch`; bash needs external controls) | Via command allow/deny + external sandbox | App policy (plus Docker if added) |
-| CrewAI | Not built-in | Not built-in | Not built-in | Not built-in | External controls required |
-| PydanticAI | Strong in Code Mode (Monty); otherwise not built-in | Strong in Code Mode; otherwise not built-in | Strong in Code Mode; otherwise not built-in | Policy in your tool wrappers | Rust sandbox (Monty) + your controls |
-| AG2 | Yes with Docker executor (`work_dir` mount) | Yes if keys never mounted | Via Docker networking/proxy | Via container policy/wrappers | Container boundary |
+Columns are ordered from "what the agent can see/touch on disk" through to
+"what enforces the policy". Two columns are deliberately distinct:
+
+- **URL restrictions** — HTTP/HTTPS-layer allowlist applied to the agent's
+  fetch tools (webfetch/websearch/etc.).
+- **Network restrictions** — broader socket-/DNS-/firewall-level egress
+  control. URL allowlists do not stop a `bash -c "curl ..."` or a raw
+  socket; only network-layer controls (sandbox-exec `(deny network*)`,
+  Docker network namespace + proxy, host firewall like LuLu/Little Snitch)
+  do.
+- **Process visibility limits** — whether the framework prevents the
+  agent from enumerating, inspecting, or signaling other processes on the
+  host (`ps`, `/proc/*/cmdline`, `lsof`, `kill`, etc.). Agents that can
+  read other processes can scrape secrets out of `argv`, environment
+  variables, or open file handles.
+
+| Framework | File restrictions | SSH key restrictions | URL restrictions | Network restrictions | Process visibility limits | Installer restrictions | Enforcement level |
+|---|---|---|---|---|---|---|---|
+| Claude Code | Yes (`/sandbox` filesystem policy) | Yes (`denyRead` on `~/.ssh`) | Yes (managed domain filtering/proxy) | Yes when `/sandbox` profile uses `(deny network*)`; otherwise relies on app-layer allowlist | Configurable via sandbox-exec (`(deny process-info*)`, `(deny mach-lookup)`); not enforced by default profile | Indirect via command policy + environment | OS-level sandbox + app policy |
+| OpenCode | Yes (permission rules, app-level) | Yes (pattern deny, app-level) | Partial (`webfetch/websearch`; bash needs external controls) | Not built-in (bash escape route); rely on Docker netns + proxy | Not built-in; rely on Docker PID namespace | Via command allow/deny + external sandbox | App policy (plus Docker if added) |
+| CrewAI | Not built-in | Not built-in | Not built-in | Not built-in | Not built-in | Not built-in | External controls required |
+| PydanticAI | Strong in Code Mode (Monty); otherwise not built-in | Strong in Code Mode; otherwise not built-in | Strong in Code Mode; otherwise not built-in | Strong in Code Mode (Monty isolates network); otherwise not built-in | Strong in Code Mode (Monty has no host process access); otherwise not built-in | Policy in your tool wrappers | Rust sandbox (Monty) + your controls |
+| AG2 | Yes with Docker executor (`work_dir` mount) | Yes if keys never mounted | Via Docker networking/proxy | Via Docker network policy + proxy ACL | Yes via Docker PID namespace (default); broken if `--pid=host` is set | Via container policy/wrappers | Container boundary |
+
+For frameworks marked "Not built-in" or "Configurable", the practical
+defense remains the container/VM boundary plus a host firewall:
+
+- **Network**: route the agent through a proxy (`examples/squid.conf`)
+  inside a Docker network with no direct internet route, then keep a
+  host-level deny-by-default firewall (LuLu / Little Snitch / `pf`).
+- **Process visibility**: prefer Docker / Tart so the agent runs in its
+  own PID namespace. Avoid `--pid=host`, `docker run --privileged`, or
+  mounting `/proc`. On macOS `sandbox-exec`, add `(deny process-info*)`
+  and `(deny mach-lookup)` to the profile.
+
+### Default best-practice recommendations per framework
+
+These are the defaults this repo recommends. They turn each row of the
+matrix into concrete configuration. Treat them as the floor: weaken
+only with a written reason and a compensating control.
+
+**All frameworks (cross-cutting):**
+
+- Run the agent inside a container (OrbStack / Lima / Docker Desktop) or
+  a disposable VM (Tart for macOS). No host home mount; mount only the
+  project directory at a fixed path (e.g. `/workspace`).
+- Force outbound traffic through a proxy with a deny-by-default
+  allowlist. Start from `examples/allowlist.domains` and
+  `examples/squid.conf`. Add a host-level firewall (LuLu / Little Snitch
+  / `pf`) as defense-in-depth.
+- Never mount `~/.ssh`, `~/.aws`, `~/.config/gcloud`, or other
+  credential directories. Use ephemeral, scope-limited credentials
+  generated by the helpers under `scripts/llm-*.fish`.
+- Pin all installed tools to exact versions (`examples/agent-tools.env`,
+  lockfiles checked in, `npm ci` / `uv sync --frozen`). CI gates this
+  via `scripts/check-pinning.fish`.
+- Default network policy: `strict-egress`. Document any exceptions.
+- Do not pass `--pid=host`, `--network=host`, `--privileged`, or mount
+  `/var/run/docker.sock` into the agent container.
+
+**Claude Code:** start from `examples/claude-code.settings.json`.
+Enable `/sandbox`, deny-list `~/.ssh`, `~/.aws`, `~/.config/gcloud`,
+and shell rc files. Sandbox profile must include `(deny network*)`,
+`(deny process-info*)`, and `(deny mach-lookup)`; allow only the
+specific subpaths the session needs to write.
+
+**OpenCode:** load `examples/opencode.restrictive.json` via
+`OPENCODE_CONFIG`, then run OpenCode inside the `agent` container from
+`examples/docker-compose.yml`. App-level URL allowlist is not enough on
+its own — bash escapes it; the container network namespace + proxy is
+what enforces network policy.
+
+**CrewAI:** treat the framework as having no built-in controls. Run
+the crew runtime inside a container, expose only the project mount,
+keep credentials in short-lived env vars or secret mounts, and route
+all egress through the proxy. For tools that execute generated code,
+prefer external sandbox services (E2B / Modal) over local execution.
+
+**PydanticAI:** for any LLM-written code, use Code Mode with Monty so
+execution happens in the Rust sandbox (no host process access, no host
+filesystem, no host network). For ordinary tools, enforce path/network
+allowlists in each tool wrapper, set `requires_approval=True` on tools
+that mutate state or can exfiltrate, and cap runs with `UsageLimits`
+(`request_limit`, `tool_calls_limit`, token caps).
+
+**AG2:** use `DockerCommandLineCodeExecutor`, never the local executor.
+Mount only a per-session `work_dir`; keep the container's root
+filesystem read-only where possible; set `network_mode` to use the
+proxy network, not `host`. Destroy the execution container after each
+session.
+
+**macOS host (defense-in-depth):** for risky one-off package installs,
+prefer `scripts/brew-vm.fish` over the host. `scripts/macos-sandbox.fish`
+(`sandboxctl local ...`) is acceptable as a lighter local layer for
+trusted tasks but not as a substitute for container/VM isolation.
 
 ### OpenCode deep dive (requested focus)
 

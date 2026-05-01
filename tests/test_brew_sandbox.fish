@@ -20,18 +20,16 @@ end
 
 function test_uninitialized_use_fails
     # When the prefix has not been initialised yet, brew-sandbox should warn and exit 1.
-    set -l tmp (mktemp -d)
+    set -l tmp (mk_tmpdir)
     set -l out (env HOME=$tmp $FISH_BIN -c "source '$SCRIPT'; brew-sandbox info" 2>&1)
     set -l rc $status
-    rm -rf $tmp
     assert_eq "brew-sandbox uninit fails" $rc 1
     assert_contains "brew-sandbox uninit suggests init" "$out" "brew-sandbox-init"
 end
 
 function test_warning_is_emitted
-    set -l tmp (mktemp -d)
+    set -l tmp (mk_tmpdir)
     set -l out (env HOME=$tmp $FISH_BIN -c "source '$SCRIPT'; brew-sandbox info" 2>&1)
-    rm -rf $tmp
     assert_contains "brew-sandbox emits warning" "$out" "Warning"
 end
 

@@ -56,13 +56,12 @@ function test_print_ssh_config_validates
 end
 
 function test_print_ssh_config_renders_aliases
-    set -l tmp (mktemp -d)
+    set -l tmp (mk_tmpdir)
     set -l ro "$tmp/ro_key"
     set -l rw "$tmp/rw_key"
     touch $ro $rw
     set -l out (__invoke print-ssh-config --ro-key $ro --rw-key $rw)
     set -l rc $status
-    rm -rf $tmp
     assert_status "llm-gh-key print-ssh-config status" $rc 0
     assert_contains "llm-gh-key print-ssh-config ro alias" "$out" "github-llm-ro"
     assert_contains "llm-gh-key print-ssh-config rw alias" "$out" "github-llm-rw"

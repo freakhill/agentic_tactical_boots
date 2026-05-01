@@ -61,7 +61,7 @@ end
 
 function test_gh_ssh_config_uninstall
     __uv_runs; or return 0
-    set -l tmp (mktemp -d)
+    set -l tmp (mk_tmpdir)
     set -l cfg "$tmp/config"
     printf "%s\n" \
         "Host other" \
@@ -77,7 +77,6 @@ function test_gh_ssh_config_uninstall
     set -l out (uv run --script $GH_PY ssh-config-uninstall $cfg '^llm-gh-key:owner-repo:s1:' 2>&1)
     set -l rc $status
     set -l content (cat $cfg)
-    rm -rf $tmp
     assert_status "gh ssh-config-uninstall status" $rc 0
     # First line of the multi-line output is the count of removed blocks.
     # fish already split command substitution on newlines, so $out is a list.
@@ -114,7 +113,7 @@ end
 
 function test_forgejo_instance_lifecycle
     __uv_runs; or return 0
-    set -l tmp (mktemp -d)
+    set -l tmp (mk_tmpdir)
     set -l cfg "$tmp/inst.json"
     echo '{"instances":{}}' >$cfg
 
@@ -137,7 +136,6 @@ function test_forgejo_instance_lifecycle
     set -l after (uv run --script $FORGEJO_PY instance-list $cfg 2>&1)
     assert_contains "forgejo instance-remove drops the entry" "$after" "No Forgejo instance profiles configured"
 
-    rm -rf $tmp
 end
 
 function test_forgejo_parse_key_id
@@ -170,7 +168,7 @@ end
 
 function test_radicle_identity_lifecycle
     __uv_runs; or return 0
-    set -l tmp (mktemp -d)
+    set -l tmp (mk_tmpdir)
     set -l st "$tmp/state.json"
     echo '{"identities":[],"bindings":[]}' >$st
 
@@ -185,55 +183,50 @@ function test_radicle_identity_lifecycle
     set -l all (uv run --script $RADICLE_PY list-identities $st --show-all 2>&1)
     assert_contains "radicle list-identities --show-all shows retired" "$all" "rid-1	retired"
 
-    rm -rf $tmp
 end
 
 function test_radicle_retire_expired
     __uv_runs; or return 0
-    set -l tmp (mktemp -d)
+    set -l tmp (mk_tmpdir)
     set -l st "$tmp/state.json"
     set -l json '{"identities":[{"id":"rid-old","name":"a","key_path":"/tmp/a","pub_path":"/tmp/a.pub","created_at":"2024-01-01T00:00:00Z","expires_at":"2024-01-02T00:00:00Z","status":"active"},{"id":"rid-new","name":"b","key_path":"/tmp/b","pub_path":"/tmp/b.pub","created_at":"2024-01-01T00:00:00Z","expires_at":"2099-01-01T00:00:00Z","status":"active"}],"bindings":[]}'
     echo $json >$st
     set -l out (uv run --script $RADICLE_PY retire-expired $st 2>&1)
-    rm -rf $tmp
     assert_eq "radicle retire-expired retired old only" "$out" "rid-old"
 end
 
 function test_radicle_bind_repo_idempotent_upgrade
     __uv_runs; or return 0
-    set -l tmp (mktemp -d)
+    set -l tmp (mk_tmpdir)
     set -l st "$tmp/state.json"
     set -l json '{"identities":[{"id":"rid-1","name":"a","key_path":"/tmp/k","pub_path":"/tmp/k.pub","status":"active","expires_at":"2099-01-01T00:00:00Z","created_at":"2024-01-01T00:00:00Z"}],"bindings":[]}'
     echo $json >$st
 
     set -l first (uv run --script $RADICLE_PY bind-repo $st rad:z3abc rid-1 ro "first" 2>&1)
     set -l second (uv run --script $RADICLE_PY bind-repo $st rad:z3abc rid-1 rw "upgraded" 2>&1)
-    rm -rf $tmp
     assert_eq "radicle bind-repo first call returns 'created'" "$first" "created"
     assert_eq "radicle bind-repo second call returns 'updated'" "$second" "updated"
 end
 
 function test_radicle_bind_repo_inactive_identity_rejected
     __uv_runs; or return 0
-    set -l tmp (mktemp -d)
+    set -l tmp (mk_tmpdir)
     set -l st "$tmp/state.json"
     set -l json '{"identities":[{"id":"rid-1","status":"retired","name":"a","key_path":"/tmp/k","pub_path":"/tmp/k.pub","created_at":"2024-01-01T00:00:00Z","expires_at":"2099-01-01T00:00:00Z"}],"bindings":[]}'
     echo $json >$st
     uv run --script $RADICLE_PY bind-repo $st rad:z3abc rid-1 ro "" 2>&1 >/dev/null
     set -l rc $status
-    rm -rf $tmp
     assert_eq "radicle bind-repo rejects retired identity" $rc 2
 end
 
 function test_radicle_get_active_key
     __uv_runs; or return 0
-    set -l tmp (mktemp -d)
+    set -l tmp (mk_tmpdir)
     set -l st "$tmp/state.json"
     set -l json '{"identities":[{"id":"rid-1","status":"active","name":"a","key_path":"/tmp/active.key","pub_path":"/tmp/k.pub","created_at":"2024-01-01T00:00:00Z","expires_at":"2099-01-01T00:00:00Z"}],"bindings":[]}'
     echo $json >$st
     set -l out (uv run --script $RADICLE_PY get-active-key $st rid-1 2>&1)
     set -l rc $status
-    rm -rf $tmp
     assert_status "radicle get-active-key status" $rc 0
     assert_eq "radicle get-active-key prints key_path" "$out" "/tmp/active.key"
 end

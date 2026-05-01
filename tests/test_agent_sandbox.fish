@@ -55,12 +55,11 @@ function test_invalid_network_policy_rejected
 end
 
 function test_missing_compose_file_reported
-    set -l tmp (mktemp -d)
+    set -l tmp (mk_tmpdir)
     pushd $tmp >/dev/null
     set -l out (__invoke run)
     set -l rc $status
     popd >/dev/null
-    rm -rf $tmp
     assert_eq "agent-sandbox missing compose fails" $rc 1
     assert_contains "agent-sandbox missing compose message" "$out" "docker-compose.yml"
 end

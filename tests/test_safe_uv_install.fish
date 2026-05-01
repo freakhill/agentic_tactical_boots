@@ -20,9 +20,8 @@ function __invoke_in
 end
 
 function test_no_args_prints_usage
-    set -l tmp (mktemp -d)
+    set -l tmp (mk_tmpdir)
     set -l result (__invoke_in $tmp)
-    rm -rf $tmp
     set -l rc $result[1]
     set -l out $result[2..]
     assert_status "safe-uv no-args status" $rc 0
@@ -30,9 +29,8 @@ function test_no_args_prints_usage
 end
 
 function test_help_subcommand
-    set -l tmp (mktemp -d)
+    set -l tmp (mk_tmpdir)
     set -l result (__invoke_in $tmp --help)
-    rm -rf $tmp
     set -l rc $result[1]
     set -l out $result[2..]
     assert_status "safe-uv --help status" $rc 0
@@ -40,9 +38,8 @@ function test_help_subcommand
 end
 
 function test_unknown_subcommand_fails
-    set -l tmp (mktemp -d)
+    set -l tmp (mk_tmpdir)
     set -l result (__invoke_in $tmp not-a-real-cmd)
-    rm -rf $tmp
     set -l rc $result[1]
     set -l out $result[2..]
     assert_eq "safe-uv unknown subcmd fails" $rc 1
@@ -50,9 +47,8 @@ function test_unknown_subcommand_fails
 end
 
 function test_sync_without_lockfile_fails
-    set -l tmp (mktemp -d)
+    set -l tmp (mk_tmpdir)
     set -l result (__invoke_in $tmp sync)
-    rm -rf $tmp
     set -l rc $result[1]
     set -l out $result[2..]
     assert_eq "safe-uv sync no lock fails" $rc 1
@@ -60,9 +56,8 @@ function test_sync_without_lockfile_fails
 end
 
 function test_pip_install_unpinned_rejected
-    set -l tmp (mktemp -d)
+    set -l tmp (mk_tmpdir)
     set -l result (__invoke_in $tmp pip-install requests)
-    rm -rf $tmp
     set -l rc $result[1]
     set -l out $result[2..]
     assert_eq "safe-uv pip-install unpinned fails" $rc 1
@@ -70,9 +65,8 @@ function test_pip_install_unpinned_rejected
 end
 
 function test_pip_install_no_args_rejected
-    set -l tmp (mktemp -d)
+    set -l tmp (mk_tmpdir)
     set -l result (__invoke_in $tmp pip-install)
-    rm -rf $tmp
     set -l rc $result[1]
     set -l out $result[2..]
     assert_eq "safe-uv pip-install no-args fails" $rc 1
