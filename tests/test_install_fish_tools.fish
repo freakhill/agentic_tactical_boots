@@ -15,6 +15,12 @@ function test_help_subcommand
     assert_contains "install-fish-tools help mentions uninstall" "$out" "uninstall"
 end
 
+function test_help_includes_enriched_sections
+    set -l out (run_fish $SCRIPT help 2>&1)
+    assert_contains "install-fish-tools help has Description" "$out" "Description:"
+    assert_contains "install-fish-tools help has Examples" "$out" "Examples"
+end
+
 function test_dash_dash_help
     set -l out (run_fish $SCRIPT --help 2>&1)
     set -l rc $status

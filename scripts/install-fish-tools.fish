@@ -29,7 +29,8 @@ set -g __ift_bin_cmds \
     llm-radicle-access \
     safe-npm-install \
     safe-uv \
-    check-pinning
+    check-pinning \
+    slop
 set -g __ift_vendor_conf_files \
     agentic_tactical_boots.fish
 set -g __ift_vendor_completion_cmds \
@@ -44,18 +45,51 @@ set -g __ift_vendor_completion_cmds \
     safe-npm-install \
     safe-uv
 
-function __ift_usage
+function __ift_examples
+    # BEGIN AUTOGEN: examples section="Install fish command shims"
+    echo '  scripts/install-fish-tools.fish install'
+    echo '  scripts/install-fish-tools.fish install --target /path/to/target'
+    echo '  scripts/install-fish-tools.fish uninstall'
+    # END AUTOGEN: examples
+end
+
+function __ift_help
+    echo "install-fish-tools — install repo command shims (stow preferred, direct fallback)"
+    echo ""
+    echo "Description:"
+    echo "  Installs the bin/ shims and fish vendor assets from this repo into a"
+    echo "  target directory (default: \$HOME, so commands land in ~/.local/bin)."
+    echo "  Uses GNU Stow when available; falls back to managed direct copies"
+    echo "  otherwise. Re-running 'install' is idempotent and safe."
+    echo ""
     echo "Usage:"
-    echo "  scripts/install-fish-tools.fish install [--target <dir>] [--dry-run] [--force]"
-    echo "  scripts/install-fish-tools.fish uninstall [--target <dir>] [--dry-run] [--force]"
+    echo "  scripts/install-fish-tools.fish install [options]"
+    echo "  scripts/install-fish-tools.fish uninstall [options]"
     echo "  scripts/install-fish-tools.fish status [--target <dir>]"
     echo "  scripts/install-fish-tools.fish help"
     echo ""
+    echo "Options:"
+    echo "  --target <dir>    Absolute install root (default: \$HOME)."
+    echo "  --dry-run         Print what would happen without writing."
+    echo "  --force           Replace conflicting files / re-stow."
+    echo ""
+    echo "Examples (synced from README → 'Install fish command shims'):"
+    __ift_examples
+    echo ""
     echo "Notes:"
-    echo "  - Default target is $HOME, which installs commands under ~/.local/bin."
+    echo "  - Default target installs commands under ~/.local/bin."
     echo "  - Stow is preferred when available; direct-copy mode is fallback only."
     echo "  - Installer includes fish vendor_conf/vendor_completions under ~/.local/share/fish."
-    echo "  - If ~/.local/bin is missing from PATH, status/install print a fish snippet to add it."
+    echo "  - If ~/.local/bin is missing from PATH, install/status print a fish snippet to add it."
+    echo "  - Full reference: README.md → 'Install fish command shims'."
+end
+
+function __ift_help_to_stderr
+    __ift_help 1>&2
+end
+
+function __ift_usage
+    __ift_help
 end
 
 function __ift_path_contains --argument-names needle
@@ -389,7 +423,9 @@ while test $i -le (count $argv)
         case --target
             set -l next_i (math "$i + 1")
             if test $next_i -gt (count $argv)
-                echo "--target requires a value" 1>&2
+                echo "Error: --target requires a value" 1>&2
+                echo "" 1>&2
+                __ift_help_to_stderr
                 exit 1
             end
             set target "$argv[$next_i]"
@@ -397,21 +433,24 @@ while test $i -le (count $argv)
         case --target=*
             set target (string replace -- '--target=' '' "$arg")
         case '*'
-            echo "Unknown argument: $arg" 1>&2
-            __ift_usage
+            echo "Error: Unknown argument: $arg" 1>&2
+            echo "" 1>&2
+            __ift_help_to_stderr
             exit 1
     end
     set i (math "$i + 1")
 end
 
 if not string match -q -- '/*' "$target"
-    echo "--target must be an absolute path" 1>&2
+    echo "Error: --target must be an absolute path (got: $target)" 1>&2
+    echo "" 1>&2
+    __ift_help_to_stderr
     exit 1
 end
 
 switch "$action"
     case help --help -h
-        __ift_usage
+        __ift_help
         exit 0
     case status
         __ift_print_status "$target"
@@ -440,7 +479,8 @@ switch "$action"
             rm -f "$__ift_state_file"
         end
     case '*'
-        echo "Unknown command: $action" 1>&2
-        __ift_usage
+        echo "Error: Unknown command: $action" 1>&2
+        echo "" 1>&2
+        __ift_help_to_stderr
         exit 1
 end
