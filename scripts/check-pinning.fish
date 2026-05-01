@@ -34,21 +34,21 @@ if test $failed -eq 1
     exit 1
 end
 
-if grep -nE '^(CLAUDE_CODE_VERSION|OPENCODE_VERSION)=latest$' examples/agent-tools.env examples/agent-tools.env.example >/dev/null
+if grep -nE '^(CLAUDE_CODE_VERSION|OPENCODE_VERSION|OPENCLAW_VERSION|ZEROCLAW_VERSION)=latest$' examples/agent-tools.env examples/agent-tools.env.example >/dev/null
     echo "unpinned npm CLI version found in agent-tools env files" 1>&2
-    grep -nE '^(CLAUDE_CODE_VERSION|OPENCODE_VERSION)=latest$' examples/agent-tools.env examples/agent-tools.env.example 1>&2
+    grep -nE '^(CLAUDE_CODE_VERSION|OPENCODE_VERSION|OPENCLAW_VERSION|ZEROCLAW_VERSION)=latest$' examples/agent-tools.env examples/agent-tools.env.example 1>&2
     set failed 1
 end
 
-if grep -nE '^ARG (CLAUDE_CODE_VERSION|OPENCODE_VERSION)=latest$' examples/Dockerfile.agent.tools >/dev/null
+if grep -nE '^ARG (CLAUDE_CODE_VERSION|OPENCODE_VERSION|OPENCLAW_VERSION|ZEROCLAW_VERSION)=latest$' examples/Dockerfile.agent.tools >/dev/null
     echo "unpinned npm CLI ARG default found in examples/Dockerfile.agent.tools" 1>&2
-    grep -nE '^ARG (CLAUDE_CODE_VERSION|OPENCODE_VERSION)=latest$' examples/Dockerfile.agent.tools 1>&2
+    grep -nE '^ARG (CLAUDE_CODE_VERSION|OPENCODE_VERSION|OPENCLAW_VERSION|ZEROCLAW_VERSION)=latest$' examples/Dockerfile.agent.tools 1>&2
     set failed 1
 end
 
-if grep -nE '(CLAUDE_CODE_VERSION|OPENCODE_VERSION): \$\{\1:-latest\}' examples/docker-compose.yml >/dev/null
+if grep -nE '(CLAUDE_CODE_VERSION|OPENCODE_VERSION|OPENCLAW_VERSION|ZEROCLAW_VERSION): \$\{\1:-latest\}' examples/docker-compose.yml >/dev/null
     echo "unpinned compose build arg default found in examples/docker-compose.yml" 1>&2
-    grep -nE '(CLAUDE_CODE_VERSION|OPENCODE_VERSION): \$\{\1:-latest\}' examples/docker-compose.yml 1>&2
+    grep -nE '(CLAUDE_CODE_VERSION|OPENCODE_VERSION|OPENCLAW_VERSION|ZEROCLAW_VERSION): \$\{\1:-latest\}' examples/docker-compose.yml 1>&2
     set failed 1
 end
 

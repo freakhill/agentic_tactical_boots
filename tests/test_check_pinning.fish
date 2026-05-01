@@ -65,4 +65,26 @@ function test_detects_unpinned_latest_in_env
     assert_contains "check-pinning reports failure reason" "$out" "unpinned"
 end
 
+function test_detects_unpinned_latest_for_openclaw_and_zeroclaw
+    # Why: OpenClaw / ZeroClaw env slots were added as reserved templates.
+    # If a user uncomments and sets `=latest`, the pinning gate must catch it.
+    for var in OPENCLAW_VERSION ZEROCLAW_VERSION
+        set -l tmp (mk_tmpdir)
+        mkdir -p "$tmp/examples"
+        cp "$REPO_ROOT/examples/Dockerfile.agent.tools" "$tmp/examples/"
+        cp "$REPO_ROOT/examples/docker-compose.yml" "$tmp/examples/"
+        echo "$var=latest" > "$tmp/examples/agent-tools.env"
+        echo "$var=latest" > "$tmp/examples/agent-tools.env.example"
+
+        set -l saved $PWD
+        cd "$tmp"
+        set -l out (run_fish $CHECK 2>&1)
+        set -l rc $status
+        cd "$saved"
+
+        assert_eq "check-pinning fails on $var=latest" $rc 1
+        assert_contains "check-pinning flags $var" "$out" "unpinned"
+    end
+end
+
 run_tests_in_file (basename (status filename))

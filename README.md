@@ -164,6 +164,8 @@ Columns are ordered from "what the agent can see/touch on disk" through to
 | CrewAI | Not built-in | Not built-in | Not built-in | Not built-in | Not built-in | Not built-in | External controls required |
 | PydanticAI | Strong in Code Mode (Monty); otherwise not built-in | Strong in Code Mode; otherwise not built-in | Strong in Code Mode; otherwise not built-in | Strong in Code Mode (Monty isolates network); otherwise not built-in | Strong in Code Mode (Monty has no host process access); otherwise not built-in | Policy in your tool wrappers | Rust sandbox (Monty) + your controls |
 | AG2 | Yes with Docker executor (`work_dir` mount) | Yes if keys never mounted | Via Docker networking/proxy | Via Docker network policy + proxy ACL | Yes via Docker PID namespace (default); broken if `--pid=host` is set | Via container policy/wrappers | Container boundary |
+| OpenClaw | Partial (workspace defaults to `~/.openclaw/workspace`; broad by default — must be confined to a project mount) | Not built-in (requires explicit deny via container/sandbox; OpenClaw will read whatever the host process can read) | Partial (per-tool/channel allow/deny in `SOUL.md` and config; not a full HTTP allowlist) | Not built-in (messaging-channel egress is intentional; rely on container netns + proxy ACL) | Not built-in (rely on Docker PID namespace) | Via tool allowlist + external sandbox | App policy (plus Docker if added) |
+| ZeroClaw | Yes (workspace boundary in runtime; supervised autonomy denies escape by default) | Yes if keys never mounted; runtime does not auto-expose host creds | Partial (per-tool policy; HTTP tool can be gated) | Partial (OS sandbox layer: Landlock / Bubblewrap / Seatbelt / Docker — depends on host); rely on container netns + proxy ACL for full enforcement | Yes when run under Bubblewrap/Landlock/Docker; not enforced by the binary alone | Yes (medium-risk requires approval, high-risk blocked; cryptographic tool receipts) | Rust runtime policy + OS sandbox |
 
 For frameworks marked "Not built-in" or "Configurable", the practical
 defense remains the container/VM boundary plus a host firewall:
@@ -232,6 +234,30 @@ filesystem read-only where possible; set `network_mode` to use the
 proxy network, not `host`. Destroy the execution container after each
 session.
 
+**OpenClaw:** start from `examples/openclaw.restrictive.md`. Because
+OpenClaw is a *messaging gateway* — by design it bridges messaging
+platforms (WhatsApp, Telegram, Slack, Discord, …) into an LLM agent —
+its blast radius is broader than a coding-only agent. Defaults:
+override the workspace from `~/.openclaw/workspace` to a per-session
+project mount; opt in to channels explicitly, never enable all
+channels at once; never run on the host with access to host
+credential directories — always run inside the `agent` container
+from `examples/docker-compose.yml`; treat `SOUL.md` and any persona
+file as untrusted input (prompt-injection vector); keep the proxy
+allowlist narrow and add only the messaging-platform endpoints you
+actually intend to bridge.
+
+**ZeroClaw:** start from `examples/zeroclaw.restrictive.md`. ZeroClaw
+ships with security-relevant defaults (workspace boundary, supervised
+autonomy where medium-risk operations require approval and high-risk
+are blocked, cryptographic tool receipts, optional OS sandbox layer
+via Landlock / Bubblewrap / Seatbelt / Docker). Keep them on. On
+macOS the OS sandbox layer reduces to Seatbelt — defense-in-depth
+only; still run ZeroClaw inside the `agent` container so the network
+namespace + proxy enforces egress. Pin the binary by checksum, not
+by `latest` tag. Disable the shell tool unless a specific task needs
+it; if you enable it, route it through the same proxy.
+
 **macOS host (defense-in-depth):** for risky one-off package installs,
 prefer `scripts/brew-vm.fish` over the host. `scripts/macos-sandbox.fish`
 (`sandboxctl local ...`) is acceptable as a lighter local layer for
@@ -249,6 +275,69 @@ Recommended layering:
 4. Use restrictive `opencode.json`
 
 Reference config: `examples/opencode.restrictive.json`
+
+### OpenClaw deep dive
+
+OpenClaw's threat surface is wider than a code-only agent because it
+is, by design, a multi-channel messaging gateway: every connected
+channel (WhatsApp, Telegram, Slack, Discord, Signal, iMessage, email,
+…) is both an input vector for prompt injection and an output vector
+for exfiltration. The host process reads workspace memory from
+plain Markdown files (`SOUL.md`, notes, scratch files) — those files
+are agent-controlled and must be treated as untrusted text.
+
+Recommended layering:
+
+1. Run OpenClaw in the `agent` container, never directly on the host.
+2. Override `OPENCLAW_WORKSPACE` (or equivalent) to a per-session
+   project subdirectory mounted at `/workspace`; do not let it
+   default to `~/.openclaw/workspace`.
+3. Enable channels one at a time, behind explicit credentials with
+   the smallest possible scope (single chat, single inbox).
+4. Route all egress through the proxy, and add only the messaging
+   platform's API endpoints you actually need to the allowlist.
+5. Treat `SOUL.md` as configuration, not as a memory bank. Review it
+   like you would a system prompt.
+6. Never mount host credential directories. Use ephemeral keys from
+   `scripts/llm-*.fish` for any source-control identity OpenClaw
+   needs.
+
+Reference policy: `examples/openclaw.restrictive.md`.
+
+### ZeroClaw deep dive
+
+ZeroClaw is a single Rust binary with a trait-driven runtime: model
+providers, channels, memory backends, and tools are pluggable. The
+positive side is that the runtime itself ships security-relevant
+defaults that this repo wants to keep enforced:
+
+- workspace boundary (operations confined to a configured root)
+- supervised autonomy (medium-risk operations require approval,
+  high-risk operations are blocked)
+- optional OS sandbox layer (Landlock on Linux, Seatbelt on macOS,
+  Bubblewrap, or Docker)
+- cryptographic tool receipts (signed audit log of every tool call)
+
+Keep all four on. The runtime defaults are necessary but not
+sufficient: the OS sandbox layer on macOS reduces to Seatbelt, which
+is deprecated as a primary boundary. Treat ZeroClaw's local sandbox
+as defense-in-depth and still run the binary inside the `agent`
+container so the Docker network namespace + proxy enforces egress.
+
+Recommended layering:
+
+1. Pin the binary by SHA-256 checksum; do not fetch `latest`.
+2. Run inside the `agent` container, mounting only the project
+   directory.
+3. Keep supervised autonomy enabled. Do not raise the auto-approve
+   threshold for the agent identity.
+4. Enable the shell tool only when needed; when enabled, ensure the
+   container's `HTTP_PROXY`/`HTTPS_PROXY` is set so any subprocess
+   inherits the allowlist.
+5. Persist tool receipts to a path under `/workspace` so the audit
+   log survives container teardown.
+
+Reference policy: `examples/zeroclaw.restrictive.md`.
 
 ### Claude Code sandbox reference
 
@@ -439,6 +528,45 @@ set -x OPENCODE_CONFIG (pwd)/examples/opencode.restrictive.json
 2. Run OpenCode inside the `agent` container from `examples/docker-compose.yml`
 3. Do not mount host home, only mount repo workspace
 4. Keep proxy allowlist minimal and add domains only when required
+
+### How to lock down OpenClaw
+
+1. Read `examples/openclaw.restrictive.md` and apply its policy to
+   your local OpenClaw config.
+2. Run OpenClaw inside the `agent` container from
+   `examples/docker-compose.yml`. Do not run it on the host.
+3. Override the workspace location so it does not default to the
+   user's home directory:
+
+```fish
+docker compose -f examples/docker-compose.yml run --rm \
+    -e OPENCLAW_WORKSPACE=/workspace/.openclaw \
+    agent fish
+```
+
+4. Enable one channel at a time. For each channel, scope its
+   credential to the smallest possible target (one chat, one inbox).
+5. Add the channel's API host to `examples/allowlist.domains` and
+   restart the proxy. Remove it when the session ends.
+6. Treat `SOUL.md` as configuration, not memory. Review it on every
+   session start.
+
+### How to lock down ZeroClaw
+
+1. Read `examples/zeroclaw.restrictive.md` and apply its policy to
+   your local ZeroClaw config.
+2. Pin the binary by SHA-256 and verify before running.
+3. Run ZeroClaw inside the `agent` container so the Docker network
+   namespace + proxy enforces egress, even though ZeroClaw also has
+   its own OS sandbox layer (Seatbelt on macOS, Landlock /
+   Bubblewrap on Linux).
+4. Keep supervised autonomy at the default threshold (medium-risk
+   asks for approval; high-risk is blocked).
+5. Persist tool receipts under `/workspace` so the audit log
+   survives container teardown.
+6. Enable the shell tool only on demand. When enabled, confirm the
+   container's `HTTP_PROXY` / `HTTPS_PROXY` are set so any
+   subprocess egress goes through the allowlist.
 
 ### How to use optional local `sandbox-exec` layer on macOS
 
@@ -836,6 +964,8 @@ Host remains unchanged after VM deletion.
 - `examples/squid.conf`: URL allowlist rules
 - `examples/opencode.restrictive.json`: restrictive OpenCode permissions
 - `examples/claude-code.settings.json`: restrictive Claude Code sandbox settings
+- `examples/openclaw.restrictive.md`: restrictive OpenClaw policy (channels, workspace, SOUL.md handling)
+- `examples/zeroclaw.restrictive.md`: restrictive ZeroClaw policy (workspace boundary, supervised autonomy, tool receipts)
 
 ---
 
