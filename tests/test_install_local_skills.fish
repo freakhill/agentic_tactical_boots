@@ -24,7 +24,7 @@ end
 function test_dry_run_does_not_write
     # Run with HOME pointed at a tmp dir so dst_dir = $tmp/.claude/skills
     set -l tmp (mktemp -d)
-    set -l out (env HOME=$tmp command fish $SCRIPT --dry-run 2>&1)
+    set -l out (env HOME=$tmp $FISH_BIN $SCRIPT --dry-run 2>&1)
     set -l rc $status
 
     set -l dst "$tmp/.claude/skills"
@@ -46,7 +46,7 @@ end
 
 function test_real_install_copies_skill_dirs
     set -l tmp (mktemp -d)
-    set -l out (env HOME=$tmp command fish $SCRIPT 2>&1)
+    set -l out (env HOME=$tmp $FISH_BIN $SCRIPT 2>&1)
     set -l rc $status
 
     set -l dst "$tmp/.claude/skills"

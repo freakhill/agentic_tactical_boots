@@ -25,11 +25,23 @@ function test_help_subcommand_works
 end
 
 function test_passes_against_repo_fixtures
-    pushd "$REPO_ROOT" >/dev/null
+    # examples/agent-tools.env is gitignored (it's a copy of .example for local
+    # use). Make the happy path hermetic by staging all four required files in
+    # a tmp dir, using the .example contents to seed the .env file.
+    set -l tmp (mktemp -d)
+    mkdir -p "$tmp/examples"
+    cp "$REPO_ROOT/examples/agent-tools.env.example" "$tmp/examples/agent-tools.env.example"
+    cp "$REPO_ROOT/examples/agent-tools.env.example" "$tmp/examples/agent-tools.env"
+    cp "$REPO_ROOT/examples/Dockerfile.agent.tools"   "$tmp/examples/Dockerfile.agent.tools"
+    cp "$REPO_ROOT/examples/docker-compose.yml"       "$tmp/examples/docker-compose.yml"
+
+    pushd "$tmp" >/dev/null
     set -l out (run_fish $CHECK 2>&1)
     set -l rc $status
     popd >/dev/null
-    assert_status "check-pinning passes on repo state" $rc 0
+    rm -rf "$tmp"
+
+    assert_status "check-pinning passes on staged fixtures" $rc 0
     assert_contains "check-pinning success message" "$out" "pinning check passed"
 end
 

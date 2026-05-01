@@ -12,10 +12,14 @@ set -g REPO_ROOT (cd (dirname (status filename))/..; pwd)
 set -g SCRIPTS_DIR "$REPO_ROOT/scripts"
 
 # fish 4.x does not always propagate stdout when invoking nested `fish` via the
-# function lookup path. Using `command fish` (or an absolute fish path) avoids
-# that. Tests should always go through `run_fish` rather than calling fish bare.
+# function lookup path (e.g. when a user has a fish shell function named `fish`
+# in their config). Resolving the absolute fish binary avoids that, and also
+# means `env VAR=val "$FISH_BIN" ...` works on every platform — `env` cannot
+# invoke shell builtins like `command`.
+set -g FISH_BIN (command -v fish)
+
 function run_fish
-    command fish $argv
+    $FISH_BIN $argv
 end
 
 function __test_record_pass --argument-names name
