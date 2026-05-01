@@ -8,6 +8,94 @@ This folder uses a single operational style to keep scripts easy to read, modify
 - Help output includes: `Usage`, key commands/options, and at least one short safety note.
 - Prefer subcommand style over positional ambiguity (for example: `tool run ...`, `tool list ...`).
 
+### Enriched help structure
+
+Every script's help follows this layout, in this order:
+
+```
+<tool> — <one-line description>
+
+Description:
+  <2-4 lines: what it does, default safety stance, when to use it>
+
+Usage:
+  <subcommand synopsis lines>
+
+Options:
+  --flag value    <one-line meaning, including default>
+
+Examples (synced from README → '<exact heading text>'):
+  <step caption>
+    <command 1>
+    <command 2>
+  <next step caption>
+    ...
+
+Notes:
+  - <one bullet per safety/footgun reminder>
+  - Full reference: README.md → '<exact heading text>'.
+```
+
+Implementation pattern in fish:
+
+- One `__<tool>_help` function prints help to stdout.
+- One `__<tool>_help_to_stderr` function calls the above with `1>&2`.
+- Every error path prints a one-line `Error: ...` message to stderr, then a
+  blank line, then `__<tool>_help_to_stderr`. No script should leave the user
+  with just a single-line "Usage: ..." error.
+- `help` / `--help` / `-h` and the no-args invocation all print the full help.
+
+### AUTOGEN markers (README is the single source of truth for examples)
+
+The Examples block is generated from the README so the two cannot drift:
+
+```fish
+function __<tool>_examples
+    # BEGIN AUTOGEN: examples section="<exact README heading text>"
+    echo '...auto-rewritten by scripts/sync-help-from-readme.fish...'
+    # END AUTOGEN: examples
+end
+```
+
+The section value matches a Markdown heading after stripping `#` and
+backticks. Within the matched section, every fenced ` ```fish ` code block is
+extracted and the immediately preceding `1. ...:` or `- ...` line becomes a
+caption. Run `scripts/sync-help-from-readme.fish sync` after editing README.
+CI runs `... check` and fails PRs that drift.
+
+### Repo-aware `here` shortcuts
+
+For tools that take `--repo` (or analogous "which repo am I touching" flags),
+add a `here <subcommand>` family that infers the value from the cwd's git
+state. Reference implementation: `llm-gh-key here` in
+`scripts/llm-github-keys.fish`. Conventions:
+
+- `here` is sugar; it pre-pends inferred flags to argv and falls through to
+  the normal subcommand dispatcher so behavior stays identical to explicit
+  invocations.
+- Inference must read from `$ATB_USER_PWD` first and fall back to `$PWD`,
+  because the bin-shim dispatcher cds into the repo root.
+- A failed inference must print the underlying CLI flag the user can supply,
+  not just "could not infer".
+- Common `here` subcommands: `create-pair`, `list`, `revoke <id>`, `cleanup`,
+  `revoke-all`. Map convenience names like `cleanup` to the underlying
+  `revoke-expired --yes` so users do not have to remember every flag.
+
+### Per-tool TUI subcommand
+
+For tools with non-trivial workflows, add a `tui` subcommand that opens an
+interactive launcher. Conventions:
+
+- Soft-deps on `gum`. If gum is missing, print install hints
+  (`brew install gum`, charmbracelet URL) and a CLI fallback pointer.
+- Every action prints `Equivalent CLI: <cmd>` BEFORE running so the TUI is
+  teachable, not a black box.
+- Destructive actions confirm with `gum confirm --default=false`.
+- Reuses `here` shortcuts under the hood when applicable.
+
+The global launcher `slop` (separate script) is hard-dep on gum and
+delegates to per-tool TUIs where they exist.
+
 ## Comment best practices
 
 - Add a short top-of-file block describing:
@@ -24,6 +112,25 @@ This folder uses a single operational style to keep scripts easy to read, modify
 - Keep deny-by-default egress and explicit domain allowlists.
 - For VM workflows, prefer explicit file transfer (`copy-in`/`copy-out`) over broad host mounts.
 - For key lifecycle workflows, prefer short-lived credentials and clear revocation paths.
+
+### Host-side temporary state
+
+Never write host-side state to a fixed path under `/tmp` (e.g.
+`/tmp/<tool>-<session>.log`). On multi-user systems that is a
+symlink-attack target and lets one user clobber or read another's data.
+
+Use one of:
+
+- `mktemp` / `mktemp -d` — atomic, unique, respects `$TMPDIR` (per-user
+  on macOS).
+- A per-user state directory under `$XDG_STATE_HOME` (fall back to
+  `$HOME/.local/state`), created with `mkdir -p` followed by
+  `chmod 700`. See `__brew_vm_state_dir` in `brew-vm.fish` for the
+  reference helper.
+
+Guest-side paths inside disposable VMs/containers (e.g. `/tmp/llm-share`
+inside a Tart VM) are exempt — those filesystems are single-user and
+ephemeral by construction.
 
 ## Python helpers via uv
 
