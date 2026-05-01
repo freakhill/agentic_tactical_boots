@@ -20,6 +20,25 @@ source .venv/bin/activate.fish
 scripts/sandboxctl.fish help
 ```
 
+For an interactive launcher across every tool in this repo:
+
+```fish
+brew install gum    # one-time, hard dependency for the global TUI
+slop                # menu-driven entry; each action prints its equivalent CLI
+```
+
+For the most common workflow (managing deploy keys for the current repo) you
+can skip the menu entirely with the repo-aware shortcuts:
+
+```fish
+llm-gh-key here create-pair    # RO+RW pair for cwd's git origin, 24h, ssh-config installed
+llm-gh-key here list           # list keys for current repo
+llm-gh-key here revoke 12345   # revoke by id
+llm-gh-key here cleanup        # revoke-expired --yes
+llm-gh-key here revoke-all     # revoke-by-title '^llm-agent:' --yes (destructive)
+llm-gh-key tui                 # per-tool TUI; soft-deps on gum
+```
+
 ## Install fish command shims
 
 Install command shims into `~/.local/bin` (default target is `$HOME`):
