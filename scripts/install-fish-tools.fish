@@ -167,6 +167,18 @@ function __ift_install_direct --argument-names target dry_run force
 
     for path in (__ift_managed_paths "$target")
         if test -e "$path"
+            # Same symlinked-parent guard as __ift_remove_direct: never follow
+            # a stow tree-folded directory symlink and accidentally write or
+            # delete inside the symlink target. If we hit this in install,
+            # bail loudly — direct-mode install into a stow-managed tree is
+            # ambiguous and the user should `uninstall` first.
+            set -l parent (dirname "$path")
+            if test -L "$parent"
+                echo "Refusing to install over a symlinked parent dir: $parent" 1>&2
+                echo "Run 'scripts/install-fish-tools.fish uninstall' first to clear the previous stow install." 1>&2
+                return 1
+            end
+
             if test "$dry_run" = "true"
                 echo "[dry-run] Would remove existing managed file: $path"
             else
@@ -219,6 +231,24 @@ end
 function __ift_remove_direct --argument-names target dry_run force
     for path in (__ift_managed_paths "$target")
         if not test -e "$path"
+            continue
+        end
+
+        # Why this guard exists:
+        # When the previous install ran in stow mode, stow performs "tree
+        # folding": instead of populating $target/.local/share/fish/<dir>/
+        # with per-file symlinks, it makes the whole <dir> itself a symlink
+        # into the repo's stow source. A managed path under such a folded
+        # dir is reached via that symlink and resolves to the source file
+        # in the repo. `rm -f $path` follows the parent symlink and would
+        # delete the source file. Direct-mode wrappers, by definition,
+        # live in real directories we created — so a symlinked parent is
+        # always someone else's territory and must be skipped.
+        set -l parent (dirname "$path")
+        if test -L "$parent"
+            if test "$dry_run" = "true"
+                echo "[dry-run] Skipping (parent is a symlink, owned by stow): $path"
+            end
             continue
         end
 

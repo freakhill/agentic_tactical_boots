@@ -43,6 +43,8 @@ How mode selection works:
   - `vendor_conf.d/agentic_tactical_boots.fish` to auto-load PATH setup in new fish sessions
   - `vendor_completions.d/*.fish` for command autocompletion
 
+Re-running `install` is safe and idempotent. The cleanup phase that removes stale managed files explicitly skips paths whose parent directory is a symlink (typical of a previous stow install with tree folding), so it cannot follow the symlink and delete files in the repo's stow source tree.
+
 If `~/.local/bin` is not on `PATH`, installer output includes a fish snippet to add it.
 
 Uninstall shims:

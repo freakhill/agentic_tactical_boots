@@ -71,4 +71,41 @@ function test_install_dry_run_creates_no_wrappers
     assert_eq "install-fish-tools dry-run created nothing" $created 0
 end
 
+# Regression: when a previous stow install tree-folded a target subdirectory
+# (so the dir itself is a symlink into the repo's stow source), re-running
+# install / uninstall must NOT follow the symlink and delete the source file.
+# https://github.com/freakhill/agentic_tactical_boots — the bug deleted 11
+# tracked files from stow/fish-tools/share/fish/.
+function test_remove_direct_skips_symlinked_parent
+    set -l tmp (mk_tmpdir)
+    set -l fixture "$tmp/fixture"
+    mkdir -p $fixture
+    # Drop a marked file matching one of the managed names into the fixture.
+    # Without the guard, __ift_remove_direct would resolve the symlink and
+    # delete this file.
+    echo "# managed-by: agentic_tactical_boots/install-fish-tools" \
+        > "$fixture/agentic_tactical_boots.fish"
+
+    mkdir -p "$tmp/.local/share/fish"
+    ln -s "$fixture" "$tmp/.local/share/fish/vendor_conf.d"
+
+    # Drive __ift_remove_direct through `uninstall --dry-run`. The guard's
+    # dry-run branch prints a recognizable message, and dry-run avoids
+    # invoking stow.
+    set -l out (run_fish $SCRIPT uninstall --target $tmp --dry-run 2>&1)
+    set -l rc $status
+    assert_status "uninstall --dry-run status" $rc 0
+    assert_contains "guard reported skip for symlinked parent" "$out" "Skipping (parent is a symlink"
+
+    # And the real (non-dry-run) uninstall must preserve the fixture file.
+    # This is the bit that catches a regression where someone removes the
+    # guard while keeping the dry-run message intact by accident.
+    run_fish $SCRIPT uninstall --target $tmp 2>&1 >/dev/null
+    if test -f "$fixture/agentic_tactical_boots.fish"
+        __test_record_pass "fixture file survived real uninstall"
+    else
+        __test_record_fail "fixture file survived real uninstall" "fixture file was deleted via symlinked parent"
+    end
+end
+
 run_tests_in_file (basename (status filename))
