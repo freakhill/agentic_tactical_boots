@@ -70,9 +70,9 @@ The runner returns non-zero from a file iff at least one assertion failed.
   template (`scripts/script-template.fish`).
 - `--help` / `help` paths for every script.
 - Unknown-subcommand and missing-required-arg failure paths.
-- Pure-logic, hermetic checks (`check-pinning` against staged fixtures,
-  `safe-uv` validation, `install-local-skills --dry-run`,
-  `install-fish-tools --target` validation, `macos-sandbox` profile
+- Pure-logic, hermetic checks (`slop-pinning` against staged fixtures,
+  `slop-safe-uv` validation, `slop-skills-install --dry-run`,
+  `slop-install --target` validation, `slop-macos-sandbox` profile
   generation on Darwin / refusal on Linux, every Python helper subcommand).
 
 What is **not** exercised: actual Docker / `tart` / `gh api` / `curl`

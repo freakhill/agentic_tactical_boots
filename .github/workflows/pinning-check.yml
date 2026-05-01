@@ -17,4 +17,4 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y fish
 
       - name: Run pinning check
-        run: fish scripts/check-pinning.fish
+        run: fish scripts/slop-pinning.fish

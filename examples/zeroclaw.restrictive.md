@@ -63,7 +63,7 @@ controls used elsewhere in this repo.
 ## Identity
 
 - Use ephemeral source-control identities from
-  `scripts/llm-github-keys.fish`,
-  `scripts/llm-forgejo-keys.fish`, or
-  `scripts/llm-radicle-access.fish` for any repo ZeroClaw touches.
+  `scripts/slop-gh-key.fish`,
+  `scripts/slop-forgejo-key.fish`, or
+  `scripts/slop-radicle.fish` for any repo ZeroClaw touches.
 - Never reuse a personal SSH key for ZeroClaw.

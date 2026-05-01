@@ -52,7 +52,7 @@ The Examples block is generated from the README so the two cannot drift:
 ```fish
 function __<tool>_examples
     # BEGIN AUTOGEN: examples section="<exact README heading text>"
-    echo '...auto-rewritten by scripts/sync-help-from-readme.fish...'
+    echo '...auto-rewritten by scripts/slop-sync-help.fish...'
     # END AUTOGEN: examples
 end
 ```
@@ -60,15 +60,15 @@ end
 The section value matches a Markdown heading after stripping `#` and
 backticks. Within the matched section, every fenced ` ```fish ` code block is
 extracted and the immediately preceding `1. ...:` or `- ...` line becomes a
-caption. Run `scripts/sync-help-from-readme.fish sync` after editing README.
+caption. Run `scripts/slop-sync-help.fish sync` after editing README.
 CI runs `... check` and fails PRs that drift.
 
 ### Repo-aware `here` shortcuts
 
 For tools that take `--repo` (or analogous "which repo am I touching" flags),
 add a `here <subcommand>` family that infers the value from the cwd's git
-state. Reference implementation: `llm-gh-key here` in
-`scripts/llm-github-keys.fish`. Conventions:
+state. Reference implementation: `slop-gh-key here` in
+`scripts/slop-gh-key.fish`. Conventions:
 
 - `here` is sugar; it pre-pends inferred flags to argv and falls through to
   the normal subcommand dispatcher so behavior stays identical to explicit
@@ -125,7 +125,7 @@ Use one of:
   on macOS).
 - A per-user state directory under `$XDG_STATE_HOME` (fall back to
   `$HOME/.local/state`), created with `mkdir -p` followed by
-  `chmod 700`. See `__brew_vm_state_dir` in `brew-vm.fish` for the
+  `chmod 700`. See `__brew_vm_state_dir` in `slop-brew-vm.fish` for the
   reference helper.
 
 Guest-side paths inside disposable VMs/containers (e.g. `/tmp/llm-share`

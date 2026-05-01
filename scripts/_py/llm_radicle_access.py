@@ -3,7 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Helpers for scripts/llm-radicle-access.fish.
+"""Helpers for scripts/slop-radicle.fish.
 
 Why this exists as a uv-managed script:
 - Per project policy, all Python work runs under uv with a pinned interpreter.

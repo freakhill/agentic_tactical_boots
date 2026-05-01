@@ -2,7 +2,7 @@
 
 # Legacy helper for prefix separation only.
 # This is intentionally retained for compatibility, but it is NOT a security
-# sandbox. Use scripts/brew-vm.fish for VM-backed isolation.
+# sandbox. Use scripts/slop-brew-vm.fish for VM-backed isolation.
 #
 # Reference:
 # - Homebrew docs: https://docs.brew.sh/
@@ -17,7 +17,7 @@ function brew-sandbox-help --description "Show brew-sandbox usage"
     echo ""
     echo "Warning:"
     echo "  - brew-sandbox is prefix isolation only, not a security sandbox."
-    echo "  - Use scripts/brew-vm.fish for VM-backed isolation."
+    echo "  - Use scripts/slop-brew-vm.fish for VM-backed isolation."
 end
 
 function brew-sandbox-init --description "Initialize separate Homebrew prefix"
@@ -36,7 +36,7 @@ function brew-sandbox --description "Run isolated Homebrew instance"
     end
 
     echo "Warning: brew-sandbox is prefix isolation only, not a security sandbox." 1>&2
-    echo "Use scripts/brew-vm.fish for real VM-backed isolation." 1>&2
+    echo "Use scripts/slop-brew-vm.fish for real VM-backed isolation." 1>&2
 
     if not test -x "$BREW_SANDBOX_PREFIX/bin/brew"
         echo "Sandbox Homebrew not initialized. Run: brew-sandbox-init" 1>&2

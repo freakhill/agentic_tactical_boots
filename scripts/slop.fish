@@ -3,7 +3,7 @@
 # Purpose:
 # - One interactive launcher for every tool in this repo.
 # - Hard-deps on gum so we can rely on rich primitives (style/choose/input/confirm).
-# - Per-tool TUIs (e.g. `llm-gh-key tui`) are smaller, focused launchers and
+# - Per-tool TUIs (e.g. `slop-gh-key tui`) are smaller, focused launchers and
 #   only soft-dep on gum; this global TUI is the discoverable entry point.
 #
 # TUI principles enforced here:
@@ -34,7 +34,7 @@ function __slop_help
     echo "  slop --version  Print version."
     echo ""
     echo "Per-tool TUIs (lighter, focused launchers):"
-    echo "  llm-gh-key tui     GitHub deploy keys for the current repo."
+    echo "  slop-gh-key tui     GitHub deploy keys for the current repo."
     echo "  (more coming as the pattern rolls out)"
     echo ""
     echo "Requirements:"
@@ -47,12 +47,12 @@ function __slop_help
     echo "  slop"
     echo ""
     echo "  # Per-tool TUI for keys (faster than the global menu)"
-    echo "  llm-gh-key tui"
+    echo "  slop-gh-key tui"
     echo ""
     echo "Notes:"
     echo "  - Esc on any menu exits/returns to the previous screen."
     echo "  - Every action shows 'Equivalent CLI:' so the TUI is teachable."
-    echo "  - For a non-interactive workflow, see: scripts/sandboxctl.fish help"
+    echo "  - For a non-interactive workflow, see: scripts/slop-sandboxctl.fish help"
 end
 
 function __slop_require_gum
@@ -64,8 +64,8 @@ function __slop_require_gum
         echo "  https://github.com/charmbracelet/gum#installation     (other OSes)" 1>&2
         echo "" 1>&2
         echo "If you do not want to install gum, every tool also has a CLI:" 1>&2
-        echo "  scripts/sandboxctl.fish help" 1>&2
-        echo "  llm-gh-key --help" 1>&2
+        echo "  scripts/slop-sandboxctl.fish help" 1>&2
+        echo "  slop-gh-key --help" 1>&2
         return 1
     end
 end
@@ -158,7 +158,7 @@ function __slop_top_menu
             case "Install / uninstall fish-tool shims"
                 __slop_dispatch_install_shims
             case "Install / uninstall local skills"
-                __slop_placeholder "Install local skills" "scripts/install-local-skills.fish install" "scripts/install-local-skills.fish uninstall"
+                __slop_placeholder "Install local skills" "scripts/slop-skills-install.fish install" "scripts/slop-skills-install.fish uninstall"
             case "Verifications*"
                 __slop_dispatch_verifications
             case "Show README quickstart"
@@ -181,18 +181,18 @@ function __slop_placeholder --argument-names label cli_a cli_b
     if test -n "$cli_b"
         __slop_show_cli "$cli_b"
     end
-    gum style --faint "Full reference: scripts/sandboxctl.fish help, README.md."
+    gum style --faint "Full reference: scripts/slop-sandboxctl.fish help, README.md."
     __slop_pause
 end
 
 function __slop_dispatch_gh
-    # Delegates to llm-gh-key's per-tool TUI; that flow already follows the
+    # Delegates to slop-gh-key's per-tool TUI; that flow already follows the
     # equivalent-CLI convention, so we stay out of its way.
     clear
     gum style --bold --foreground 212 "GitHub deploy keys"
     echo ""
-    __slop_show_cli "llm-gh-key tui"
-    command fish -c "source '$SLOP_REPO_ROOT/scripts/llm-github-keys.fish'; llm-gh-key tui"
+    __slop_show_cli "slop-gh-key tui"
+    command fish -c "source '$SLOP_REPO_ROOT/scripts/slop-gh-key.fish'; slop-gh-key tui"
     __slop_pause
 end
 
@@ -200,8 +200,8 @@ function __slop_dispatch_forgejo
     clear
     gum style --bold --foreground 212 "Forgejo deploy keys"
     echo ""
-    __slop_show_cli "llm-forgejo-key tui"
-    command fish -c "source '$SLOP_REPO_ROOT/scripts/llm-forgejo-keys.fish'; llm-forgejo-key tui"
+    __slop_show_cli "slop-forgejo-key tui"
+    command fish -c "source '$SLOP_REPO_ROOT/scripts/slop-forgejo-key.fish'; slop-forgejo-key tui"
     __slop_pause
 end
 
@@ -209,8 +209,8 @@ function __slop_dispatch_radicle
     clear
     gum style --bold --foreground 212 "Radicle access"
     echo ""
-    __slop_show_cli "llm-radicle-access tui"
-    command fish -c "source '$SLOP_REPO_ROOT/scripts/llm-radicle-access.fish'; llm-radicle-access tui"
+    __slop_show_cli "slop-radicle tui"
+    command fish -c "source '$SLOP_REPO_ROOT/scripts/slop-radicle.fish'; slop-radicle tui"
     __slop_pause
 end
 
@@ -218,8 +218,8 @@ function __slop_dispatch_brew_vm
     clear
     gum style --bold --foreground 212 "Brew via disposable Tart VM"
     echo ""
-    __slop_show_cli "brew-vm tui"
-    command fish -c "source '$SLOP_REPO_ROOT/scripts/brew-vm.fish'; brew-vm tui"
+    __slop_show_cli "slop-brew-vm tui"
+    command fish -c "source '$SLOP_REPO_ROOT/scripts/slop-brew-vm.fish'; slop-brew-vm tui"
     __slop_pause
 end
 
@@ -227,8 +227,8 @@ function __slop_dispatch_agent_sandbox
     clear
     gum style --bold --foreground 212 "Docker agent stack"
     echo ""
-    __slop_show_cli "agent-sandbox tui"
-    command fish -c "cd '$SLOP_REPO_ROOT'; source '$SLOP_REPO_ROOT/scripts/agent-sandbox.fish'; agent-sandbox tui"
+    __slop_show_cli "slop-agent-sandbox tui"
+    command fish -c "cd '$SLOP_REPO_ROOT'; source '$SLOP_REPO_ROOT/scripts/slop-agent-sandbox.fish'; slop-agent-sandbox tui"
     __slop_pause
 end
 
@@ -236,8 +236,8 @@ function __slop_dispatch_agent_sandbox_tools
     clear
     gum style --bold --foreground 212 "Docker agent + tools stack"
     echo ""
-    __slop_show_cli "agent-sandbox-tools tui"
-    command fish -c "cd '$SLOP_REPO_ROOT'; source '$SLOP_REPO_ROOT/scripts/agent-sandbox-tools.fish'; agent-sandbox-tools tui"
+    __slop_show_cli "slop-agent-sandbox-tools tui"
+    command fish -c "cd '$SLOP_REPO_ROOT'; source '$SLOP_REPO_ROOT/scripts/slop-agent-sandbox-tools.fish'; slop-agent-sandbox-tools tui"
     __slop_pause
 end
 
@@ -259,21 +259,21 @@ function __slop_dispatch_macos_sandbox
 
     switch "$choice"
         case "Print*"
-            __slop_show_cli "macos-sandbox print-profile"
-            command fish -c "source '$SLOP_REPO_ROOT/scripts/macos-sandbox.fish'; macos-sandbox print-profile"
+            __slop_show_cli "slop-macos-sandbox print-profile"
+            command fish -c "source '$SLOP_REPO_ROOT/scripts/slop-macos-sandbox.fish'; slop-macos-sandbox print-profile"
         case "Run*"
             set -l cmd (gum input --placeholder "command (e.g. /bin/pwd)" --prompt "command › ")
             if test -z "$cmd"
                 return 0
             end
-            __slop_show_cli "macos-sandbox run -- $cmd"
+            __slop_show_cli "slop-macos-sandbox run -- $cmd"
             if gum confirm --default=true "Run '$cmd' in sandbox?"
-                command fish -c "source '$SLOP_REPO_ROOT/scripts/macos-sandbox.fish'; macos-sandbox run -- $cmd"
+                command fish -c "source '$SLOP_REPO_ROOT/scripts/slop-macos-sandbox.fish'; slop-macos-sandbox run -- $cmd"
             end
         case "Open*"
-            __slop_show_cli "macos-sandbox shell"
+            __slop_show_cli "slop-macos-sandbox shell"
             if gum confirm --default=true "Open sandboxed /bin/zsh?"
-                command fish -c "source '$SLOP_REPO_ROOT/scripts/macos-sandbox.fish'; macos-sandbox shell"
+                command fish -c "source '$SLOP_REPO_ROOT/scripts/slop-macos-sandbox.fish'; slop-macos-sandbox shell"
             end
     end
     __slop_pause
@@ -296,12 +296,12 @@ function __slop_dispatch_install_shims
 
     switch "$choice"
         case "Install*"
-            __slop_show_cli "scripts/install-fish-tools.fish install"
-            command fish "$SLOP_REPO_ROOT/scripts/install-fish-tools.fish" install
+            __slop_show_cli "scripts/slop-install.fish install"
+            command fish "$SLOP_REPO_ROOT/scripts/slop-install.fish" install
         case "Uninstall"
-            __slop_show_cli "scripts/install-fish-tools.fish uninstall"
+            __slop_show_cli "scripts/slop-install.fish uninstall"
             if gum confirm --default=false "Remove all installed shims?"
-                command fish "$SLOP_REPO_ROOT/scripts/install-fish-tools.fish" uninstall
+                command fish "$SLOP_REPO_ROOT/scripts/slop-install.fish" uninstall
             end
         case "Show install status"
             __slop_show_cli "cat ~/.config/agentic_tactical_boots/fish-tools.env"
@@ -331,11 +331,11 @@ function __slop_dispatch_verifications
 
     switch "$choice"
         case "Run pinning check"
-            __slop_show_cli "scripts/check-pinning.fish"
-            command fish "$SLOP_REPO_ROOT/scripts/check-pinning.fish"
+            __slop_show_cli "scripts/slop-pinning.fish"
+            command fish "$SLOP_REPO_ROOT/scripts/slop-pinning.fish"
         case "Run help-text sync check*"
-            __slop_show_cli "scripts/sync-help-from-readme.fish check"
-            command fish "$SLOP_REPO_ROOT/scripts/sync-help-from-readme.fish" check
+            __slop_show_cli "scripts/slop-sync-help.fish check"
+            command fish "$SLOP_REPO_ROOT/scripts/slop-sync-help.fish" check
         case "Run full test suite"
             __slop_show_cli "fish tests/run.fish"
             command fish "$SLOP_REPO_ROOT/tests/run.fish"

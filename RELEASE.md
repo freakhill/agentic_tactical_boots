@@ -6,7 +6,7 @@ This release reshapes the developer experience without changing the security
 guarantees of the toolkit. Every user-facing script now ships with rich help,
 the most common deploy-key flows have one-line repo-aware shortcuts, and a
 new `gum`-based TUI gives a single discoverable entry point across every
-tool. A small `/tmp` security risk in `brew-vm` was also fixed in passing.
+tool. A small `/tmp` security risk in `slop-brew-vm` was also fixed in passing.
 
 ### Highlights
 
@@ -16,26 +16,26 @@ tool. A small `/tmp` security risk in `brew-vm` was also fixed in passing.
   action prints its equivalent CLI before running so the TUI is a teaching
   layer, not a black box. Esc on any menu exits/returns. Help and `--version`
   work without `gum` installed so the gate is informative, not silent.
-- **Per-tool TUIs (soft-dep on gum).** `llm-gh-key tui`, `llm-forgejo-key tui`,
-  `llm-radicle-access tui`, `brew-vm tui`, `agent-sandbox tui`,
-  `agent-sandbox-tools tui`. Each shows its current operating context
+- **Per-tool TUIs (soft-dep on gum).** `slop-gh-key tui`, `slop-forgejo-key tui`,
+  `slop-radicle tui`, `slop-brew-vm tui`, `slop-agent-sandbox tui`,
+  `slop-agent-sandbox-tools tui`. Each shows its current operating context
   (cwd, origin, network policy, deps) at the top.
 - **Repo-aware `here` shortcuts.** Infer `--repo` (and `--instance`/`--rid`
   where relevant) from the cwd's git state:
-  - `llm-gh-key here create-pair | list | revoke <id> | cleanup | revoke-all`
-  - `llm-forgejo-key here create-pair | list | revoke <id> | cleanup | revoke-all`
+  - `slop-gh-key here create-pair | list | revoke <id> | cleanup | revoke-all`
+  - `slop-forgejo-key here create-pair | list | revoke <id> | cleanup | revoke-all`
     (host → instance profile lookup)
-  - `llm-radicle-access here info | bind | unbind | list-bindings`
+  - `slop-radicle here info | bind | unbind | list-bindings`
     (RID from `git config rad.id` or `rad inspect`)
 - **Enriched help pattern across all 16 user-facing scripts.** Every script
   now follows the same layout: tagline → Description → Usage → Options →
   Examples → Notes. Every error path prints the full help to stderr (no more
   one-line "Usage: ..." dead ends).
-- **README → help sync.** A new `scripts/sync-help-from-readme.fish`
+- **README → help sync.** A new `scripts/slop-sync-help.fish`
   generator extracts fish code blocks from named README sections and
   rewrites AUTOGEN-marked example blocks in fish scripts. CI gate
   (`.github/workflows/help-sync-check.yml`) fails PRs that drift.
-- **`/tmp` security fix.** `brew-vm` now writes the `tart run` boot log to a
+- **`/tmp` security fix.** `slop-brew-vm` now writes the `tart run` boot log to a
   per-user state dir (`$XDG_STATE_HOME` or `~/.local/state/agentic-tactical-boots/brew-vm/`,
   mode 0700) instead of `/tmp/brew-vm-<fixed-name>.log`. Eliminates a
   predictable-path symlink-attack target on multi-user systems. Other `/tmp`
@@ -50,7 +50,7 @@ tool. A small `/tmp` security risk in `brew-vm` was also fixed in passing.
 | `slop`                 | Global interactive launcher (hard-dep on `gum`).              |
 | `<tool> tui`           | Per-tool launcher (soft-dep on `gum`); see scripts above.     |
 | `<tool> here ...`      | Repo-aware shortcut; see `llm-*` and `here` examples.         |
-| `sync-help-from-readme`| Maintenance tool (sync/check) for AUTOGEN example blocks.     |
+| `slop-sync-help`| Maintenance tool (sync/check) for AUTOGEN example blocks.     |
 
 ### New conventions
 
@@ -75,7 +75,7 @@ The following conventions are codified in `scripts/CONVENTIONS.md`:
 - All previous CLI invocations continue to work unchanged. `here`, `tui`, and
   `slop` are additive.
 - `__<tool>_usage` aliases are retained where existing callers (notably
-  `sandboxctl`) still reference them, so cross-script dispatch keeps working
+  `slop-sandboxctl`) still reference them, so cross-script dispatch keeps working
   during the transition.
 - The bin-shim dispatcher now exports `ATB_USER_PWD` before `cd`-ing into
   the repo root. This is invisible to existing tools and only consumed by
@@ -87,7 +87,7 @@ For users with the shims already installed, re-run the installer to pick up
 the new `slop` binary and updated completions:
 
 ```fish
-scripts/install-fish-tools.fish install
+scripts/slop-install.fish install
 ```
 
 For the global TUI:
@@ -100,12 +100,12 @@ slop                # menu-driven launcher across every tool in this repo
 For the most common workflow (managing deploy keys for the current repo):
 
 ```fish
-llm-gh-key here create-pair    # RO+RW pair, 24h, ssh-config installed
-llm-gh-key here list
-llm-gh-key here revoke <id>
-llm-gh-key here cleanup        # revoke-expired --yes
-llm-gh-key here revoke-all     # destructive; confirms
-llm-gh-key tui                 # per-tool TUI; soft-deps on gum
+slop-gh-key here create-pair    # RO+RW pair, 24h, ssh-config installed
+slop-gh-key here list
+slop-gh-key here revoke <id>
+slop-gh-key here cleanup        # revoke-expired --yes
+slop-gh-key here revoke-all     # destructive; confirms
+slop-gh-key tui                 # per-tool TUI; soft-deps on gum
 ```
 
 ### Tests

@@ -16,7 +16,7 @@ function test_help_subcommand_works_without_gum
     assert_contains "slop help mentions Usage" "$out" "Usage:"
     assert_contains "slop help mentions Examples" "$out" "Examples:"
     assert_contains "slop help mentions Notes" "$out" "Notes:"
-    assert_contains "slop help mentions per-tool TUI" "$out" "llm-gh-key tui"
+    assert_contains "slop help mentions per-tool TUI" "$out" "slop-gh-key tui"
 end
 
 function test_dash_dash_help
@@ -55,15 +55,15 @@ function test_no_args_without_gum_prints_install_hint
     assert_eq "slop no-gum fails" $rc 1
     assert_contains "slop no-gum mentions gum" "$out" "gum"
     assert_contains "slop no-gum suggests brew install" "$out" "brew install gum"
-    assert_contains "slop no-gum suggests CLI fallback" "$out" "sandboxctl.fish help"
+    assert_contains "slop no-gum suggests CLI fallback" "$out" "slop-sandboxctl.fish help"
 end
 
 function test_install_fish_tools_wraps_slop
     # The conf.d snippet wraps standalone scripts as fish functions; verify
     # 'slop' is in the standalone list so the wrapper is generated.
-    set -l installer "$REPO_ROOT/scripts/install-fish-tools.fish"
+    set -l installer "$REPO_ROOT/scripts/slop-install.fish"
     set -l content (cat "$installer")
-    assert_contains "install-fish-tools knows about slop" "$content" "slop"
+    assert_contains "slop-install knows about slop" "$content" "slop"
 end
 
 run_tests_in_file (basename (status filename))

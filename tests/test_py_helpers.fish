@@ -67,14 +67,14 @@ function test_gh_ssh_config_uninstall
         "Host other" \
         "  HostName foo" \
         "" \
-        "# BEGIN llm-gh-key:owner-repo:s1:20260101T000000Z" \
+        "# BEGIN slop-gh-key:owner-repo:s1:20260101T000000Z" \
         "Host github-llm-ro" \
         "  HostName github.com" \
-        "# END llm-gh-key:owner-repo:s1:20260101T000000Z" \
+        "# END slop-gh-key:owner-repo:s1:20260101T000000Z" \
         "" \
         "Host yet-another" \
         "  HostName bar" >$cfg
-    set -l out (uv run --script $GH_PY ssh-config-uninstall $cfg '^llm-gh-key:owner-repo:s1:' 2>&1)
+    set -l out (uv run --script $GH_PY ssh-config-uninstall $cfg '^slop-gh-key:owner-repo:s1:' 2>&1)
     set -l rc $status
     set -l content (cat $cfg)
     assert_status "gh ssh-config-uninstall status" $rc 0

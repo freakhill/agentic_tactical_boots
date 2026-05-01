@@ -20,9 +20,9 @@ Before executing this skill, read:
 
 ## Command map
 
-- GitHub: `scripts/llm-github-keys.fish` (`llm-gh-key ...`)
-- Forgejo: `scripts/llm-forgejo-keys.fish` (`llm-forgejo-key ...`)
-- Radicle: `scripts/llm-radicle-access.fish` (`llm-radicle-access ...`)
+- GitHub: `scripts/slop-gh-key.fish` (`slop-gh-key ...`)
+- Forgejo: `scripts/slop-forgejo-key.fish` (`slop-forgejo-key ...`)
+- Radicle: `scripts/slop-radicle.fish` (`slop-radicle ...`)
 
 The fish wrappers above delegate JSON / state / datetime work to small Python
 helpers under `scripts/_py/llm_*.py`. Each helper carries PEP-723 inline
@@ -45,24 +45,24 @@ metadata pinning the interpreter, and is invoked via `uv run --script`.
 
 ### GitHub key pair
 
-1. `source scripts/llm-github-keys.fish`
-2. `llm-gh-key create-pair --repo <owner>/<repo> --name session-1 --ttl 24h --install-ssh-config`
+1. `source scripts/slop-gh-key.fish`
+2. `slop-gh-key create-pair --repo <owner>/<repo> --name session-1 --ttl 24h --install-ssh-config`
 3. Use `git@github-llm-ro:<owner>/<repo>.git` for read-only operations.
-4. Revoke with `llm-gh-key revoke-expired --repo <owner>/<repo> --yes`.
+4. Revoke with `slop-gh-key revoke-expired --repo <owner>/<repo> --yes`.
 
 ### GitHub key pair — repo-aware shortcuts
 
-When invoked from inside the target repo's working tree, `llm-gh-key here ...`
+When invoked from inside the target repo's working tree, `slop-gh-key here ...`
 infers `--repo` from the cwd's `origin` remote (handles HTTPS, SSH, and
 `github-*` ssh-config aliases) and supplies sensible defaults:
 
-- `llm-gh-key here create-pair` — RO+RW pair, 24h TTL, auto name
+- `slop-gh-key here create-pair` — RO+RW pair, 24h TTL, auto name
   (`auto-<short-sha>-<utc-date>`), `--install-ssh-config` enabled by default
   (override with `--no-install-config`).
-- `llm-gh-key here list` — list deploy keys for the current repo.
-- `llm-gh-key here revoke <id>` — revoke a single key by id.
-- `llm-gh-key here cleanup` — `revoke-expired --yes` for the current repo.
-- `llm-gh-key here revoke-all` — `revoke-by-title '^llm-agent:' --yes` for the
+- `slop-gh-key here list` — list deploy keys for the current repo.
+- `slop-gh-key here revoke <id>` — revoke a single key by id.
+- `slop-gh-key here cleanup` — `revoke-expired --yes` for the current repo.
+- `slop-gh-key here revoke-all` — `revoke-by-title '^llm-agent:' --yes` for the
   current repo (destructive; confirm explicitly).
 
 Falls back to a clear error with the underlying CLI flag to use if the cwd is
@@ -75,47 +75,47 @@ before executing):
 
 - `slop` — global launcher across every tool in this repo. Hard-deps on
   [`gum`](https://github.com/charmbracelet/gum). Install with `brew install gum`.
-- `llm-gh-key tui` — focused per-tool launcher for the current repo's deploy
+- `slop-gh-key tui` — focused per-tool launcher for the current repo's deploy
   keys. Soft-deps on `gum` (graceful install hint if missing).
 
 ### Forgejo key pair
 
-1. `source scripts/llm-forgejo-keys.fish`
-2. `llm-forgejo-key bootstrap-config`
-3. `llm-forgejo-key create-pair --instance main --repo <owner>/<repo> --name session-1 --ttl 24h --install-ssh-config`
+1. `source scripts/slop-forgejo-key.fish`
+2. `slop-forgejo-key bootstrap-config`
+3. `slop-forgejo-key create-pair --instance main --repo <owner>/<repo> --name session-1 --ttl 24h --install-ssh-config`
 4. Revoke by id/title/expiration as needed.
 
 ### Forgejo — repo-aware shortcuts and TUI
 
 When invoked from a Forgejo-tracked repo's working tree:
 
-- `llm-forgejo-key here create-pair` — RO+RW pair, infers `--instance` (looked
+- `slop-forgejo-key here create-pair` — RO+RW pair, infers `--instance` (looked
   up by host in the saved profiles file) and `--repo` from the cwd's origin.
   Auto name and 24h TTL by default; ssh-config installed.
-- `llm-forgejo-key here list` / `here revoke <id>` / `here cleanup` /
+- `slop-forgejo-key here list` / `here revoke <id>` / `here cleanup` /
   `here revoke-all`.
-- `llm-forgejo-key tui` — focused per-tool TUI (soft-deps on gum).
+- `slop-forgejo-key tui` — focused per-tool TUI (soft-deps on gum).
 
 If the host has no matching profile, the error message tells you to run
 `bootstrap-config` and `instance-set --name <label> --url https://<host> --token-env <ENV>`.
 
 ### Radicle identities across multiple repos
 
-1. `source scripts/llm-radicle-access.fish`
-2. `llm-radicle-access create-identity --name session-1 --ttl 24h`
-3. `llm-radicle-access bind-repo --rid <rad:...> --identity-id <id> --access ro|rw`
-4. `llm-radicle-access retire-expired --yes`
+1. `source scripts/slop-radicle.fish`
+2. `slop-radicle create-identity --name session-1 --ttl 24h`
+3. `slop-radicle bind-repo --rid <rad:...> --identity-id <id> --access ro|rw`
+4. `slop-radicle retire-expired --yes`
 
 ### Radicle — repo-aware shortcuts and TUI
 
 When invoked from a Radicle-tracked repo (one where `git config rad.id` is set
 or `rad inspect` returns a RID):
 
-- `llm-radicle-access here info` — print the inferred RID.
-- `llm-radicle-access here bind --identity-id <id> --access ro|rw [--note text]`
-- `llm-radicle-access here unbind [--identity-id <id>] [--yes]`
-- `llm-radicle-access here list-bindings`
-- `llm-radicle-access tui` — focused per-tool TUI (soft-deps on gum).
+- `slop-radicle here info` — print the inferred RID.
+- `slop-radicle here bind --identity-id <id> --access ro|rw [--note text]`
+- `slop-radicle here unbind [--identity-id <id>] [--yes]`
+- `slop-radicle here list-bindings`
+- `slop-radicle tui` — focused per-tool TUI (soft-deps on gum).
 
 ## Safety checklist
 

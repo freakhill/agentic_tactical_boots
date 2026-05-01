@@ -20,11 +20,11 @@ Before executing this skill, read:
 
 ## Command map
 
-- Hub: `scripts/sandboxctl.fish`
-- Shim installer: `scripts/install-fish-tools.fish`
-- Docker runtime: `scripts/agent-sandbox.fish`, `scripts/agent-sandbox-tools.fish`
-- Optional local runtime: `scripts/macos-sandbox.fish` (`sandboxctl local ...`)
-- VM runtime: `scripts/brew-vm.fish`
+- Hub: `scripts/slop-sandboxctl.fish`
+- Shim installer: `scripts/slop-install.fish`
+- Docker runtime: `scripts/slop-agent-sandbox.fish`, `scripts/slop-agent-sandbox-tools.fish`
+- Optional local runtime: `scripts/slop-macos-sandbox.fish` (`slop-sandboxctl local ...`)
+- VM runtime: `scripts/slop-brew-vm.fish`
 
 ## Default policy
 
@@ -45,30 +45,30 @@ When operating one of the supported agent runtimes, apply the matching policy te
 
 ### Docker sandbox workflow
 
-1. `scripts/sandboxctl.fish docker up`
-2. `scripts/sandboxctl.fish docker shell`
+1. `scripts/slop-sandboxctl.fish docker up`
+2. `scripts/slop-sandboxctl.fish docker shell`
 3. Verify non-allowlisted egress is blocked from agent runtime.
-4. `scripts/sandboxctl.fish docker down`
+4. `scripts/slop-sandboxctl.fish docker down`
 
 ### Optional local macOS sandbox workflow
 
-1. `source scripts/macos-sandbox.fish`
-2. `macos-sandbox run -- /bin/pwd`
+1. `source scripts/slop-macos-sandbox.fish`
+2. `slop-macos-sandbox run -- /bin/pwd`
 3. For repo-wide access, use `--repo-root-access` (alias of `--path-scope repo-root`).
 4. Prefer Docker/VM for untrusted code paths; use local sandbox as defense-in-depth only.
 
 ### Brew VM workflow
 
-1. `source scripts/brew-vm.fish`
+1. `source scripts/slop-brew-vm.fish`
 2. `set -x BREW_VM_PROXY_URL http://<proxy-host>:3128`
-3. `brew-vm create-base`
-4. `brew-vm install --network-policy strict-egress <formula>`
-5. `brew-vm verify-network`
+3. `slop-brew-vm create-base`
+4. `slop-brew-vm install --network-policy strict-egress <formula>`
+5. `slop-brew-vm verify-network`
 
 ### File sharing workflow
 
 - Docker: use `/workspace` mount.
-- VM: use `brew-vm copy-in <host-path> <guest-path>` and `brew-vm copy-out <guest-path> <host-path>`.
+- VM: use `slop-brew-vm copy-in <host-path> <guest-path>` and `slop-brew-vm copy-out <guest-path> <host-path>`.
 - Recommended guest temp path: `/tmp/llm-share`.
 
 ## Safety checklist

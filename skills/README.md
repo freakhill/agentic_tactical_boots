@@ -21,25 +21,25 @@ When script behavior changes, keep skills, docs, and tests in sync in the same c
 Install:
 
 ```fish
-scripts/install-local-skills.fish
+scripts/slop-skills-install.fish
 ```
 
 Replace existing:
 
 ```fish
-scripts/install-local-skills.fish --force
+scripts/slop-skills-install.fish --force
 ```
 
 Dry run:
 
 ```fish
-scripts/install-local-skills.fish --dry-run
+scripts/slop-skills-install.fish --dry-run
 ```
 
 Install fish tool shims (stow preferred, direct fallback):
 
 ```fish
-scripts/install-fish-tools.fish install
+scripts/slop-install.fish install
 ```
 
 The installer stows into `~/.local` (so shared `~/.local` setups coexist), installs fish vendor config/completions under `~/.local/share/fish`, and prints a `fish_add_path ~/.local/bin` hint when `PATH` is missing that entry. Re-running `install` is safe and idempotent — the cleanup phase will not follow tree-folded directory symlinks back into the repo's stow source.

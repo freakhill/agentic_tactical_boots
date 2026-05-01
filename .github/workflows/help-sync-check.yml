@@ -23,6 +23,6 @@ jobs:
 
       # Fails if any AUTOGEN: examples block in scripts/*.fish is out of sync
       # with the named README section. To fix locally, run:
-      #   scripts/sync-help-from-readme.fish sync
+      #   scripts/slop-sync-help.fish sync
       - name: Verify help text is in sync with README
-        run: fish scripts/sync-help-from-readme.fish check
+        run: fish scripts/slop-sync-help.fish check

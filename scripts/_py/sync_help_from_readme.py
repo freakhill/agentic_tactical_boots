@@ -297,7 +297,7 @@ def main(argv: list[str]) -> int:
     if any_problems:
         return 2
     if args.cmd == "check" and any_changed:
-        print("AUTOGEN drift detected; run scripts/sync-help-from-readme.fish sync", file=sys.stderr)
+        print("AUTOGEN drift detected; run scripts/slop-sync-help.fish sync", file=sys.stderr)
         return 1
     if args.cmd == "sync" and not any_changed:
         print("no changes")

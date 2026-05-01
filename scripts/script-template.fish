@@ -41,10 +41,10 @@
 
 function __example_examples
     # Replace the section= value with the README heading you want this block
-    # to mirror, then run: scripts/sync-help-from-readme.fish sync
+    # to mirror, then run: scripts/slop-sync-help.fish sync
     # CI gates drift via .github/workflows/help-sync-check.yml.
     # BEGIN AUTOGEN: examples section="<exact README heading text>"
-    echo 'placeholder — run scripts/sync-help-from-readme.fish sync'
+    echo 'placeholder — run scripts/slop-sync-help.fish sync'
     # END AUTOGEN: examples
 end
 
@@ -167,7 +167,7 @@ function <command> --description "<short description>"
             __example_tui
             return $status
         # case here
-        #     # See scripts/llm-github-keys.fish for the full pattern: infer
+        #     # See scripts/slop-gh-key.fish for the full pattern: infer
         #     # value, prepend it to argv, possibly rewrite the subcommand name,
         #     # then fall through to the normal dispatcher below.
         case '*'

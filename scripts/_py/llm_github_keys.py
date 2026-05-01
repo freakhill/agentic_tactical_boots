@@ -3,7 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Helpers for scripts/llm-github-keys.fish.
+"""Helpers for scripts/slop-gh-key.fish.
 
 Why this exists as a uv-managed script:
 - Per project policy, all Python work must run under uv with a pinned
