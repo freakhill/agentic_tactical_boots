@@ -73,4 +73,12 @@ function test_pip_install_no_args_rejected
     assert_contains "safe-uv pip-install no-args message" "$out" "<name==version>"
 end
 
+function test_help_includes_enriched_sections
+    set -l tmp (mk_tmpdir)
+    set -l result (__invoke_in $tmp --help)
+    set -l out $result[2..]
+    assert_contains "safe-uv help has Description" "$out" "Description:"
+    assert_contains "safe-uv help has Examples" "$out" "Examples:"
+end
+
 run_tests_in_file (basename (status filename))

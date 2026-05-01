@@ -13,44 +13,95 @@
 # - sandbox-exec man page: https://www.manpagez.com/man/1/sandbox-exec/
 # - Apple Platform Security: https://support.apple.com/guide/security/welcome/web
 
-function __macos_sandbox_usage
+function __macos_sandbox_examples
+    # BEGIN AUTOGEN: examples section="How to use optional local sandbox-exec layer on macOS"
+    echo 'Load helper:'
+    echo '  source scripts/macos-sandbox.fish'
+    echo
+    echo 'Run command with default cwd scope and strict egress deny:'
+    echo '  macos-sandbox run -- /bin/pwd'
+    echo
+    echo 'Run command with repository-root scope (alternative to default cwd scope):'
+    echo '  macos-sandbox run --repo-root-access -- /usr/bin/env ls'
+    echo '  macos-sandbox run --path-scope repo-root -- /usr/bin/env ls'
+    echo
+    echo 'Use through the unified hub:'
+    echo '  scripts/sandboxctl.fish local run --repo-root-access -- /bin/pwd'
+    echo
+    echo 'Add explicit additional paths only when needed:'
+    echo '  macos-sandbox run --allow-read ~/.config --allow-write ./tmp -- /usr/bin/env ls'
+    # END AUTOGEN: examples
+end
+
+function __macos_sandbox_help
+    echo "macos-sandbox — optional macOS local sandbox layer (sandbox-exec)"
+    echo ""
+    echo "Description:"
+    echo "  Run a command (or open a shell) under a tight sandbox-exec profile."
+    echo "  Default path scope is the current working directory; default network"
+    echo "  policy is strict-egress (deny network*) inside the profile."
+    echo "  This is defense-in-depth only — for untrusted execution prefer the"
+    echo "  Docker/VM workflows in this repo."
+    echo ""
     echo "Usage:"
     echo "  source scripts/macos-sandbox.fish"
-    echo "  macos-sandbox run [--network-policy strict-egress|off] [--path-scope cwd|repo-root] [--repo-root-access] [--allow-read <path>] [--allow-write <path>] <command...>"
-    echo "  macos-sandbox shell [--network-policy strict-egress|off] [--path-scope cwd|repo-root] [--repo-root-access] [--allow-read <path>] [--allow-write <path>]"
-    echo "  macos-sandbox print-profile [--network-policy strict-egress|off] [--path-scope cwd|repo-root] [--repo-root-access] [--allow-read <path>] [--allow-write <path>]"
+    echo "  macos-sandbox run [options] -- <command...>"
+    echo "  macos-sandbox shell [options]"
+    echo "  macos-sandbox print-profile [options]"
     echo "  macos-sandbox help"
     echo ""
+    echo "Options:"
+    echo "  --network-policy strict-egress|off   Deny or allow network in profile (default: strict-egress)."
+    echo "  --path-scope cwd|repo-root           File r/w scope (default: cwd)."
+    echo "  --repo-root-access                   Alias for --path-scope repo-root."
+    echo "  --allow-read <path>                  Add an extra readable subpath. Repeatable."
+    echo "  --allow-write <path>                 Add an extra writable subpath (also readable). Repeatable."
+    echo "  --                                   End of options; everything after is the command."
+    echo ""
+    echo "Examples (synced from README → 'How to use optional local sandbox-exec layer on macOS'):"
+    __macos_sandbox_examples
+    echo ""
     echo "Notes:"
-    echo "  - Optional local layer only; prefer Docker/VM isolation for untrusted execution."
-    echo "  - Default path scope is cwd. Use --repo-root-access for repo-root scope."
-    echo "  - strict-egress denies outbound network in the local sandbox profile."
+    echo "  - sandbox-exec is deprecated on macOS; treat this as defense-in-depth, not a primary boundary."
+    echo "  - print-profile is read-only — useful for auditing the generated policy before running it."
+    echo "  - For broader isolation, see: scripts/sandboxctl.fish docker ... or scripts/sandboxctl.fish brew-vm ..."
+    echo "  - Full reference: README.md → 'How to use optional local sandbox-exec layer on macOS'."
+end
+
+function __macos_sandbox_help_to_stderr
+    __macos_sandbox_help 1>&2
 end
 
 function __macos_sandbox_require_support
     if not test (uname) = "Darwin"
-        echo "macos-sandbox supports macOS only." 1>&2
-        echo "Use: scripts/sandboxctl.fish docker ... or scripts/sandboxctl.fish brew-vm ..." 1>&2
+        echo "Error: macos-sandbox supports macOS only." 1>&2
+        echo "" 1>&2
+        __macos_sandbox_help_to_stderr
         return 1
     end
 
     if not command -q sandbox-exec
-        echo "sandbox-exec is not available on this system." 1>&2
-        echo "Use: scripts/sandboxctl.fish docker ... or scripts/sandboxctl.fish brew-vm ..." 1>&2
+        echo "Error: sandbox-exec is not available on this system." 1>&2
+        echo "" 1>&2
+        __macos_sandbox_help_to_stderr
         return 1
     end
 end
 
 function __macos_sandbox_validate_policy --argument-names policy
     if not contains -- "$policy" strict-egress off
-        echo "Invalid --network-policy: $policy" 1>&2
+        echo "Error: Invalid --network-policy: $policy (allowed: strict-egress, off)" 1>&2
+        echo "" 1>&2
+        __macos_sandbox_help_to_stderr
         return 1
     end
 end
 
 function __macos_sandbox_validate_scope --argument-names scope
     if not contains -- "$scope" cwd repo-root
-        echo "Invalid --path-scope: $scope" 1>&2
+        echo "Error: Invalid --path-scope: $scope (allowed: cwd, repo-root)" 1>&2
+        echo "" 1>&2
+        __macos_sandbox_help_to_stderr
         return 1
     end
 end
@@ -150,7 +201,9 @@ function __macos_sandbox_parse_options
             case --network-policy
                 set -l next_i (math "$i + 1")
                 if test $next_i -gt (count $argv)
-                    echo "--network-policy requires a value" 1>&2
+                    echo "Error: --network-policy requires a value" 1>&2
+                    echo "" 1>&2
+                    __macos_sandbox_help_to_stderr
                     return 1
                 end
                 set __macos_sandbox_policy "$argv[$next_i]"
@@ -163,7 +216,9 @@ function __macos_sandbox_parse_options
             case --path-scope
                 set -l next_i (math "$i + 1")
                 if test $next_i -gt (count $argv)
-                    echo "--path-scope requires a value" 1>&2
+                    echo "Error: --path-scope requires a value" 1>&2
+                    echo "" 1>&2
+                    __macos_sandbox_help_to_stderr
                     return 1
                 end
                 set __macos_sandbox_scope "$argv[$next_i]"
@@ -182,7 +237,9 @@ function __macos_sandbox_parse_options
             case --allow-read
                 set -l next_i (math "$i + 1")
                 if test $next_i -gt (count $argv)
-                    echo "--allow-read requires a value" 1>&2
+                    echo "Error: --allow-read requires a value" 1>&2
+                    echo "" 1>&2
+                    __macos_sandbox_help_to_stderr
                     return 1
                 end
                 set -a __macos_sandbox_allow_read "$argv[$next_i]"
@@ -195,7 +252,9 @@ function __macos_sandbox_parse_options
             case --allow-write
                 set -l next_i (math "$i + 1")
                 if test $next_i -gt (count $argv)
-                    echo "--allow-write requires a value" 1>&2
+                    echo "Error: --allow-write requires a value" 1>&2
+                    echo "" 1>&2
+                    __macos_sandbox_help_to_stderr
                     return 1
                 end
                 set -a __macos_sandbox_allow_write "$argv[$next_i]"
@@ -210,7 +269,9 @@ function __macos_sandbox_parse_options
                 return 0
             case '*'
                 if string match -q -- '-*' "$arg"
-                    echo "Unknown option: $arg" 1>&2
+                    echo "Error: Unknown option: $arg" 1>&2
+                    echo "" 1>&2
+                    __macos_sandbox_help_to_stderr
                     return 1
                 end
                 set -g __macos_sandbox_remaining $argv[$i..-1]
@@ -227,7 +288,9 @@ function __macos_sandbox_prepare
 
     if test "$__macos_sandbox_repo_root_access" = true
         if test "$__macos_sandbox_scope_set" = true; and test "$__macos_sandbox_scope" != repo-root
-            echo "--repo-root-access conflicts with --path-scope $__macos_sandbox_scope" 1>&2
+            echo "Error: --repo-root-access conflicts with --path-scope $__macos_sandbox_scope" 1>&2
+            echo "" 1>&2
+            __macos_sandbox_help_to_stderr
             return 1
         end
         set __macos_sandbox_scope repo-root
@@ -239,7 +302,9 @@ function __macos_sandbox_prepare
     if test "$__macos_sandbox_scope" = repo-root
         set root_path (__macos_sandbox_repo_root)
         if test -z "$root_path"
-            echo "--path-scope repo-root requires running inside a git repository" 1>&2
+            echo "Error: --path-scope repo-root requires running inside a git repository" 1>&2
+            echo "" 1>&2
+            __macos_sandbox_help_to_stderr
             return 1
         end
     end
@@ -269,7 +334,7 @@ end
 
 function macos-sandbox --description "Run commands in optional macOS sandbox-exec profile"
     if test (count $argv) -eq 0
-        __macos_sandbox_usage
+        __macos_sandbox_help
         return 0
     end
 
@@ -278,7 +343,7 @@ function macos-sandbox --description "Run commands in optional macOS sandbox-exe
 
     switch "$cmd"
         case help --help -h
-            __macos_sandbox_usage
+            __macos_sandbox_help
             return 0
     end
 
@@ -289,7 +354,9 @@ function macos-sandbox --description "Run commands in optional macOS sandbox-exe
     switch "$cmd"
         case run
             if test (count $__macos_sandbox_remaining) -eq 0
-                echo "Usage: macos-sandbox run [options] <command...>" 1>&2
+                echo "Error: macos-sandbox run requires a <command> after the options (use -- to separate)." 1>&2
+                echo "" 1>&2
+                __macos_sandbox_help_to_stderr
                 __macos_sandbox_cleanup
                 return 1
             end
@@ -307,8 +374,9 @@ function macos-sandbox --description "Run commands in optional macOS sandbox-exe
             __macos_sandbox_cleanup
             return 0
         case '*'
-            echo "Unknown command: $cmd" 1>&2
-            __macos_sandbox_usage
+            echo "Error: Unknown command: $cmd" 1>&2
+            echo "" 1>&2
+            __macos_sandbox_help_to_stderr
             __macos_sandbox_cleanup
             return 1
     end

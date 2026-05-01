@@ -4,15 +4,58 @@
 # - Prevent drift to unpinned or `latest` tool versions in sandbox images.
 # - Keep automation reproducible and supply-chain risk reviewable.
 
-if test (count $argv) -gt 0; and contains -- "$argv[1]" --help -h help
+function __check_pinning_examples
+    # BEGIN AUTOGEN: examples section="Artifact pinning and attestation reference"
+    echo '  npm view @anthropic-ai/claude-code@2.1.121 dist.integrity'
+    echo '  npm view opencode-ai@1.14.28 dist.integrity'
+    echo '  "/opt/homebrew/bin/python3" -m pip index versions crewai'
+    echo '  "/opt/homebrew/bin/python3" -m pip index versions pydantic-ai'
+    echo '  "/opt/homebrew/bin/python3" -m pip index versions ag2'
+    echo '  ./scripts/check-pinning.fish'
+    # END AUTOGEN: examples
+end
+
+function __check_pinning_help
+    echo "check-pinning — CI/local gate that fails on unpinned tool versions"
+    echo ""
+    echo "Description:"
+    echo "  Walks the four pinning-relevant files in examples/ and fails if any"
+    echo "  CLI version is set to 'latest' (env file, Dockerfile ARG default,"
+    echo "  compose build arg) or if examples/Dockerfile.agent.tools contains a"
+    echo "  'uv pip install' without an exact ==version pin."
+    echo ""
     echo "Usage:"
     echo "  ./scripts/check-pinning.fish"
+    echo "  ./scripts/check-pinning.fish help"
     echo ""
     echo "Checks:"
-    echo "  - Ensures pinned CLI versions are not set to latest"
-    echo "  - Ensures Dockerfile and compose defaults are pinned"
-    echo "  - Ensures uv pip installs in tool image are exact-version pins"
-    exit 0
+    echo "  - examples/agent-tools.env(.example): no <CLI>_VERSION=latest"
+    echo "  - examples/Dockerfile.agent.tools: no ARG <CLI>_VERSION=latest"
+    echo "  - examples/docker-compose.yml: no '\${VAR:-latest}' default"
+    echo "  - examples/Dockerfile.agent.tools: every 'uv pip install' has =="
+    echo ""
+    echo "Examples (synced from README → 'Artifact pinning and attestation reference'):"
+    __check_pinning_examples
+    echo ""
+    echo "Notes:"
+    echo "  - Exits 0 with 'pinning check passed' on success, 1 with details on failure."
+    echo "  - CI runs this gate via .github/workflows/pinning-check.yml."
+    echo "  - Full reference: README.md → 'Artifact pinning and attestation reference'."
+end
+
+function __check_pinning_help_to_stderr
+    __check_pinning_help 1>&2
+end
+
+if test (count $argv) -gt 0
+    if contains -- "$argv[1]" --help -h help
+        __check_pinning_help
+        exit 0
+    end
+    echo "Error: check-pinning takes no arguments (got: $argv[1])." 1>&2
+    echo "" 1>&2
+    __check_pinning_help_to_stderr
+    exit 1
 end
 
 set -l files \

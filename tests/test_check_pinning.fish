@@ -24,6 +24,19 @@ function test_help_subcommand_works
     assert_contains "check-pinning help output" "$out" "Usage:"
 end
 
+function test_help_includes_enriched_sections
+    set -l out (run_fish $CHECK help 2>&1)
+    assert_contains "check-pinning help has Description" "$out" "Description:"
+    assert_contains "check-pinning help has Examples" "$out" "Examples"
+end
+
+function test_unknown_arg_fails_with_help
+    set -l out (run_fish $CHECK bogus 2>&1)
+    set -l rc $status
+    assert_eq "check-pinning unknown arg fails" $rc 1
+    assert_contains "check-pinning unknown arg shows Usage" "$out" "Usage:"
+end
+
 function test_passes_against_repo_fixtures
     # examples/agent-tools.env is gitignored (it's a copy of .example for local
     # use). Make the happy path hermetic by staging all four required files in

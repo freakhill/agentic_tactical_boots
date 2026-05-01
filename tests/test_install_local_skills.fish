@@ -14,6 +14,12 @@ function test_help_flag
     assert_contains "install-local-skills --help mentions copy target" "$out" "~/.claude/skills"
 end
 
+function test_help_includes_enriched_sections
+    set -l out (run_fish $SCRIPT --help 2>&1)
+    assert_contains "install-local-skills help has Description" "$out" "Description:"
+    assert_contains "install-local-skills help has Examples" "$out" "Examples:"
+end
+
 function test_unknown_argument_fails
     set -l out (run_fish $SCRIPT --bogus-flag 2>&1)
     set -l rc $status

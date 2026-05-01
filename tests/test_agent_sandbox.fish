@@ -64,4 +64,25 @@ function test_missing_compose_file_reported
     assert_contains "agent-sandbox missing compose message" "$out" "docker-compose.yml"
 end
 
+function test_help_advertises_tui_and_examples
+    set -l out (__invoke help)
+    assert_contains "agent-sandbox help mentions tui" "$out" "agent-sandbox tui"
+    assert_contains "agent-sandbox help mentions Examples" "$out" "Examples"
+end
+
+function test_tui_without_gum_prints_install_hint
+    set -l tmp (mk_tmpdir)
+    mkdir -p "$tmp/bin"
+    set -l body "
+        set -x PATH '$tmp/bin'
+        source '$SCRIPT'
+        agent-sandbox tui
+    "
+    set -l out (command fish -N -c "$body" 2>&1)
+    set -l rc $status
+    assert_eq "agent-sandbox tui no-gum fails" $rc 1
+    assert_contains "agent-sandbox tui no-gum mentions gum" "$out" "gum"
+    assert_contains "agent-sandbox tui no-gum suggests brew install" "$out" "brew install gum"
+end
+
 run_tests_in_file (basename (status filename))
