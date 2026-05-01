@@ -75,4 +75,102 @@ function test_uninstall_ssh_config_requires_marker_or_repo
     assert_contains "llm-gh-key uninstall-ssh-config message" "$out" "marker"
 end
 
+function test_help_advertises_here_and_tui
+    set -l out (__invoke --help)
+    assert_contains "llm-gh-key help mentions here" "$out" "here create-pair"
+    assert_contains "llm-gh-key help mentions tui" "$out" "llm-gh-key tui"
+end
+
+function test_here_requires_subcommand
+    set -l out (__invoke here)
+    set -l rc $status
+    assert_eq "llm-gh-key here no-sub fails" $rc 1
+    assert_contains "llm-gh-key here no-sub message" "$out" "requires a subcommand"
+end
+
+function test_here_unknown_subcommand_fails
+    # Run from a tmpdir that we initialize as a git repo with a github origin
+    # so the inference step succeeds and the unknown-sub check is what fires.
+    set -l tmp (mk_tmpdir)
+    set -l body "
+        cd '$tmp'
+        command git init -q
+        command git remote add origin git@github.com:owner/repo.git
+        source '$SCRIPT'
+        llm-gh-key here totally-not-a-thing
+    "
+    set -l out (command fish -c "$body" 2>&1)
+    set -l rc $status
+    assert_eq "llm-gh-key here unknown-sub fails" $rc 1
+    assert_contains "llm-gh-key here unknown-sub message" "$out" "unknown 'here' subcommand"
+end
+
+function test_here_outside_git_repo_fails_clearly
+    set -l tmp (mk_tmpdir)
+    set -l body "
+        cd '$tmp'
+        source '$SCRIPT'
+        llm-gh-key here list
+    "
+    set -l out (command fish -c "$body" 2>&1)
+    set -l rc $status
+    assert_eq "llm-gh-key here outside-repo fails" $rc 1
+    assert_contains "llm-gh-key here outside-repo message" "$out" "could not infer GitHub repo"
+end
+
+function test_repo_inference_supports_url_forms
+    # Each form should yield owner/repo via __llm_gh_repo_from_git.
+    for url in \
+        "git@github.com:owner/repo.git" \
+        "git@github.com:owner/repo" \
+        "https://github.com/owner/repo.git" \
+        "https://github.com/owner/repo" \
+        "ssh://git@github.com/owner/repo.git" \
+        "git@github-llm-rw:owner/repo.git"
+        set -l tmp (mk_tmpdir)
+        set -l body "
+            cd '$tmp'
+            command git init -q
+            command git remote add origin '$url'
+            source '$SCRIPT'
+            __llm_gh_repo_from_git
+        "
+        set -l out (command fish -c "$body" 2>&1)
+        assert_eq "llm-gh-key infer from $url" "$out" "owner/repo"
+    end
+end
+
+function test_repo_inference_rejects_non_github
+    set -l tmp (mk_tmpdir)
+    set -l body "
+        cd '$tmp'
+        command git init -q
+        command git remote add origin git@gitlab.com:owner/repo.git
+        source '$SCRIPT'
+        __llm_gh_repo_from_git
+        echo \"rc=\$status\"
+    "
+    set -l out (command fish -c "$body" 2>&1)
+    assert_contains "llm-gh-key rejects gitlab origin" "$out" "rc=1"
+end
+
+function test_tui_without_gum_prints_install_hint
+    # Force a PATH that excludes gum so the soft-dep check fires regardless of
+    # whether the developer has gum installed.
+    set -l tmp (mk_tmpdir)
+    mkdir -p "$tmp/bin"
+    # Provide minimal stand-ins for the few tools the function calls *before*
+    # the gum check (none should be needed, but give it a clean stub PATH).
+    set -l body "
+        set -x PATH '$tmp/bin'
+        source '$SCRIPT'
+        llm-gh-key tui
+    "
+    set -l out (command fish -c "$body" 2>&1)
+    set -l rc $status
+    assert_eq "llm-gh-key tui no-gum fails" $rc 1
+    assert_contains "llm-gh-key tui no-gum mentions gum" "$out" "gum"
+    assert_contains "llm-gh-key tui no-gum suggests brew install" "$out" "brew install gum"
+end
+
 run_tests_in_file (basename (status filename))

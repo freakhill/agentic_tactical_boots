@@ -1,7 +1,11 @@
 # managed-by: agentic_tactical_boots/install-fish-tools
 
 complete -c llm-gh-key -f
-complete -c llm-gh-key -n '__fish_use_subcommand' -a 'create create-pair print-ssh-config install-ssh-config uninstall-ssh-config list revoke revoke-by-title revoke-expired help'
+complete -c llm-gh-key -n '__fish_use_subcommand' -a 'create create-pair print-ssh-config install-ssh-config uninstall-ssh-config list revoke revoke-by-title revoke-expired here tui help'
+complete -c llm-gh-key -n '__fish_seen_subcommand_from here' -a 'create-pair list revoke cleanup revoke-all'
+complete -c llm-gh-key -n '__fish_seen_subcommand_from here' -l no-install-config -d 'For here create-pair: skip ssh config install'
+complete -c llm-gh-key -n '__fish_seen_subcommand_from here' -l ttl -r
+complete -c llm-gh-key -n '__fish_seen_subcommand_from here' -l name -r
 complete -c llm-gh-key -n '__fish_seen_subcommand_from create create-pair list revoke revoke-by-title revoke-expired install-ssh-config uninstall-ssh-config' -l repo -r
 complete -c llm-gh-key -n '__fish_seen_subcommand_from create create-pair' -l access -xa 'ro rw'
 complete -c llm-gh-key -n '__fish_seen_subcommand_from create create-pair' -l ttl -r

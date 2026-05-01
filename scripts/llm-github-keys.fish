@@ -33,9 +33,20 @@ function __llm_gh_usage
     echo "  llm-gh-key install-ssh-config --repo owner/repo --name <label> --ro-key <path> --rw-key <path> [--host-prefix github-llm]"
     echo "  llm-gh-key uninstall-ssh-config [--repo owner/repo --name <label> | --marker <marker-regex>] [--yes]"
     echo ""
+    echo "Repo-aware shortcuts (infer --repo from cwd's git origin):"
+    echo "  llm-gh-key here create-pair [--ttl 24h] [--name label] [--no-install-config]"
+    echo "  llm-gh-key here list"
+    echo "  llm-gh-key here revoke <key-id>"
+    echo "  llm-gh-key here cleanup            (revoke-expired --yes for current repo)"
+    echo "  llm-gh-key here revoke-all         (revoke-by-title '^$LLM_GH_KEY_PREFIX:' --yes)"
+    echo ""
+    echo "TUI:"
+    echo "  llm-gh-key tui                     (interactive launcher; requires gum)"
+    echo ""
     echo "Notes:"
     echo "  - Titles embed expiry as: exp=<UTC-ISO8601>."
     echo "  - Deploy keys are repo-scoped and need repo admin rights."
+    echo "  - 'here' supports github.com URLs and 'github-*' ssh-config aliases."
 end
 
 function __llm_gh_repo_slug --argument-names repo
@@ -282,6 +293,152 @@ function __llm_gh_revoke_by_ids --argument-names repo ids
     end
 end
 
+# Infer "owner/repo" from the current working directory's git origin remote.
+# Why this exists: the most common workflow is "create a key for THIS repo",
+# and forcing the user to copy/paste the slug every time is friction.
+# Supports HTTPS, SSH, and ssh-config aliases that start with "github-"
+# (the convention used by `install-ssh-config --host-prefix github-llm`).
+# For any other custom alias, the user can still pass --repo explicitly.
+function __llm_gh_repo_from_git
+    # Prefer ATB_USER_PWD when set by the bin-shim dispatcher, since the
+    # dispatcher cds into the agentic_tactical_boots repo before invoking us.
+    # Falls back to $PWD when sourced directly by the user.
+    set -l cwd "$ATB_USER_PWD"
+    if test -z "$cwd"
+        set cwd "$PWD"
+    end
+    set -l url (command git -C "$cwd" remote get-url origin 2>/dev/null)
+    if test -z "$url"
+        return 1
+    end
+
+    set -l u "$url"
+    set u (string replace -r '\.git$' '' -- "$u")
+    set u (string replace -r '^ssh://' '' -- "$u")
+    set u (string replace -r '^[^@/]+@' '' -- "$u")
+    set u (string replace -r '^https?://' '' -- "$u")
+
+    set -l groups (string match -r '^([^:/]+)[:/](.+)$' -- "$u")
+    if test (count $groups) -lt 3
+        return 1
+    end
+    set -l host "$groups[2]"
+    set -l rest "$groups[3]"
+
+    if not string match -rq '^[^/]+/[^/]+$' -- "$rest"
+        return 1
+    end
+
+    switch "$host"
+        case github.com 'github-*'
+            echo "$rest"
+            return 0
+    end
+    return 1
+end
+
+# Default --name when caller does not provide one. Embeds short git sha + UTC
+# date so concurrent sessions for the same repo do not collide and so the
+# title encodes when/where the key was created.
+function __llm_gh_default_name
+    set -l cwd "$ATB_USER_PWD"
+    if test -z "$cwd"
+        set cwd "$PWD"
+    end
+    set -l short_sha (command git -C "$cwd" rev-parse --short=7 HEAD 2>/dev/null)
+    if test -z "$short_sha"
+        set short_sha "no-sha"
+    end
+    set -l stamp (date -u +%Y%m%d)
+    echo "auto-$short_sha-$stamp"
+end
+
+# Soft-dep TUI for managing deploy keys for the current repo.
+# Why we always show the equivalent CLI: the TUI is meant to be a teaching
+# layer, not a replacement. After running once, users should know which raw
+# command to put in a script.
+function __llm_gh_tui
+    if not command -sq gum
+        echo "Error: 'gum' is required for the interactive TUI (soft dependency)." 1>&2
+        echo "" 1>&2
+        echo "Install:" 1>&2
+        echo "  brew install gum" 1>&2
+        echo "  https://github.com/charmbracelet/gum#installation" 1>&2
+        echo "" 1>&2
+        echo "Or use the CLI directly. See: llm-gh-key --help" 1>&2
+        return 1
+    end
+
+    set -l inferred (__llm_gh_repo_from_git)
+    if test -z "$inferred"
+        echo "Error: not in a git repo with a recognized GitHub origin." 1>&2
+        echo "  Run from inside a checkout whose 'origin' remote points at github.com," 1>&2
+        echo "  or use the CLI explicitly: llm-gh-key <subcommand> --repo owner/repo ..." 1>&2
+        return 1
+    end
+
+    while true
+        echo ""
+        gum style --bold --foreground 212 "GitHub deploy keys → $inferred"
+        gum style --faint "(Esc on the menu to quit. Every action prints its equivalent CLI.)"
+        echo ""
+
+        set -l action (gum choose \
+            "Create RO+RW pair (24h, install ssh config)" \
+            "List current deploy keys" \
+            "Revoke a key by id" \
+            "Revoke ALL llm-agent keys for this repo" \
+            "Cleanup expired keys" \
+            "Quit")
+
+        if test -z "$action"
+            return 0
+        end
+
+        echo ""
+        switch "$action"
+            case "Create RO+RW*"
+                __llm_gh_tui_show_cli "llm-gh-key here create-pair"
+                if gum confirm --default=true "Create RO+RW pair for $inferred?"
+                    llm-gh-key here create-pair
+                end
+            case "List*"
+                __llm_gh_tui_show_cli "llm-gh-key here list"
+                llm-gh-key here list
+            case "Revoke a key*"
+                set -l id (gum input --placeholder "deploy key id (numeric, from the list)" --prompt "key id › ")
+                if test -z "$id"
+                    continue
+                end
+                if not string match -rq '^[0-9]+$' -- "$id"
+                    gum style --foreground 196 "Not a numeric id: $id"
+                    continue
+                end
+                __llm_gh_tui_show_cli "llm-gh-key here revoke $id"
+                if gum confirm --default=false "Revoke key $id from $inferred?"
+                    llm-gh-key here revoke "$id"
+                end
+            case "Revoke ALL*"
+                gum style --foreground 196 --bold "DESTRUCTIVE: removes every deploy key whose title starts with '$LLM_GH_KEY_PREFIX:' on $inferred."
+                __llm_gh_tui_show_cli "llm-gh-key here revoke-all"
+                if gum confirm --default=false "Really revoke ALL '$LLM_GH_KEY_PREFIX:' deploy keys for $inferred?"
+                    llm-gh-key here revoke-all
+                end
+            case "Cleanup*"
+                __llm_gh_tui_show_cli "llm-gh-key here cleanup"
+                llm-gh-key here cleanup
+            case "Quit"
+                return 0
+        end
+    end
+end
+
+function __llm_gh_tui_show_cli --argument-names cmd
+    gum style --faint "Equivalent CLI:"
+    echo "  $cmd"
+    echo ""
+end
+
 function llm-gh-key --description "Manage ephemeral GitHub deploy keys for LLM agents"
     if test (count $argv) -eq 0
         __llm_gh_usage
@@ -294,6 +451,96 @@ function llm-gh-key --description "Manage ephemeral GitHub deploy keys for LLM a
     if test "$cmd" = "-h"; or test "$cmd" = "--help"
         __llm_gh_usage
         return 0
+    end
+
+    # `tui` opens the interactive launcher and never falls through to the
+    # CLI dispatcher below.
+    if test "$cmd" = "tui"
+        __llm_gh_tui $argv
+        return $status
+    end
+
+    # `here` is sugar: infer --repo from git origin in cwd, optionally rewrite
+    # the subcommand to its underlying form, and prepend convenience flags.
+    # Parsing then continues through the normal arg loop so behavior stays
+    # consistent with explicit invocations.
+    if test "$cmd" = "here"
+        if test (count $argv) -eq 0
+            echo "Error: 'here' requires a subcommand." 1>&2
+            echo "" 1>&2
+            echo "Available 'here' subcommands:" 1>&2
+            echo "  create-pair, list, revoke <id>, cleanup, revoke-all" 1>&2
+            echo "" 1>&2
+            __llm_gh_usage 1>&2
+            return 1
+        end
+
+        set cmd "$argv[1]"
+        set -e argv[1]
+
+        set -l inferred (__llm_gh_repo_from_git)
+        if test -z "$inferred"
+            echo "Error: could not infer GitHub repo from $PWD." 1>&2
+            echo "  Tried: git -C \$PWD remote get-url origin" 1>&2
+            echo "  Supported origins: github.com URLs and ssh-config aliases starting with 'github-'." 1>&2
+            echo "  Workaround: invoke the underlying subcommand with --repo owner/repo." 1>&2
+            return 1
+        end
+
+        set -l prepend --repo "$inferred"
+        set -l strip_install_config "false"
+
+        switch "$cmd"
+            case create-pair
+                # Default to installing SSH aliases — the most common follow-on step.
+                set -a prepend --install-ssh-config
+                # Default --name embeds short sha + UTC date so concurrent sessions
+                # for the same repo do not collide. User --name (parsed below) wins.
+                set -a prepend --name (__llm_gh_default_name)
+            case list
+                # No extra flags needed.
+            case revoke
+                if test (count $argv) -ge 1; and string match -rq '^[0-9]+$' -- "$argv[1]"
+                    set -a prepend --id "$argv[1]"
+                    set -e argv[1]
+                end
+            case cleanup
+                set cmd revoke-expired
+                set -a prepend --yes
+            case revoke-all
+                set cmd revoke-by-title
+                set -a prepend --match '^'$LLM_GH_KEY_PREFIX':' --yes
+            case '*'
+                echo "Error: unknown 'here' subcommand: $cmd" 1>&2
+                echo "" 1>&2
+                echo "Available: create-pair, list, revoke <id>, cleanup, revoke-all" 1>&2
+                return 1
+        end
+
+        # Honor the --no-install-config sugar by both removing it from argv
+        # and dropping --install-ssh-config from prepend.
+        set -l filtered
+        for a in $argv
+            if test "$a" = "--no-install-config"
+                set strip_install_config "true"
+                continue
+            end
+            set -a filtered "$a"
+        end
+        set argv $filtered
+
+        if test "$strip_install_config" = "true"
+            set -l p2
+            for a in $prepend
+                if test "$a" = "--install-ssh-config"
+                    continue
+                end
+                set -a p2 "$a"
+            end
+            set prepend $p2
+        end
+
+        set argv $prepend $argv
     end
 
     set -l repo ""
