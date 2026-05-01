@@ -41,6 +41,14 @@ end
 function atb-dispatch --argument-names mode rel_script rel_fn
     set -e argv[1..3]
 
+    # Preserve the caller's cwd as ATB_USER_PWD before we cd into the repo
+    # root below. Tools that infer context from cwd (e.g. `llm-gh-key here`,
+    # which reads the user's git remote) need the original directory, not the
+    # internal repo where dispatched scripts run.
+    if not set -q ATB_USER_PWD
+        set -gx ATB_USER_PWD "$PWD"
+    end
+
     __atb_load_state; or return 1
     __atb_maybe_migrate; or return 1
 
