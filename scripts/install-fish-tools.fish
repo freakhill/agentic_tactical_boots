@@ -30,6 +30,19 @@ set -g __ift_bin_cmds \
     safe-npm-install \
     safe-uv \
     check-pinning
+set -g __ift_vendor_conf_files \
+    agentic_tactical_boots.fish
+set -g __ift_vendor_completion_cmds \
+    sandboxctl \
+    agent-sandbox \
+    agent-sandbox-tools \
+    macos-sandbox \
+    brew-vm \
+    llm-gh-key \
+    llm-forgejo-key \
+    llm-radicle-access \
+    safe-npm-install \
+    safe-uv
 
 function __ift_usage
     echo "Usage:"
@@ -41,6 +54,23 @@ function __ift_usage
     echo "Notes:"
     echo "  - Default target is $HOME, which installs commands under ~/.local/bin."
     echo "  - Stow is preferred when available; direct-copy mode is fallback only."
+    echo "  - Installer includes fish vendor_conf/vendor_completions under ~/.local/share/fish."
+    echo "  - If ~/.local/bin is missing from PATH, status/install print a fish snippet to add it."
+end
+
+function __ift_path_contains --argument-names needle
+    contains -- "$needle" $PATH
+end
+
+function __ift_print_path_hint --argument-names target
+    set -l bin_path "$target/.local/bin"
+    if __ift_path_contains "$bin_path"
+        return 0
+    end
+
+    echo "PATH warning: $bin_path is not in PATH."
+    echo "Add this to your fish config (~/.config/fish/config.fish):"
+    echo "  fish_add_path $bin_path"
 end
 
 function __ift_is_managed --argument-names path
@@ -62,23 +92,43 @@ function __ift_managed_paths --argument-names target
     for cmd in $__ift_bin_cmds
         set out $out "$target/.local/bin/$cmd"
     end
+    for conf_file in $__ift_vendor_conf_files
+        set out $out "$target/.local/share/fish/vendor_conf.d/$conf_file"
+    end
+    for cmd in $__ift_vendor_completion_cmds
+        set out $out "$target/.local/share/fish/vendor_completions.d/$cmd.fish"
+    end
     printf '%s\n' $out
 end
 
 function __ift_check_sources
-    if not test -d "$__ift_pkg_dir/.local/bin"
-        echo "Missing stow package bin dir: $__ift_pkg_dir/.local/bin" 1>&2
+    if not test -d "$__ift_pkg_dir/bin"
+        echo "Missing stow package bin dir: $__ift_pkg_dir/bin" 1>&2
         return 1
     end
 
-    if not test -f "$__ift_pkg_dir/.local/lib/agentic_tactical_boots/dispatch.fish"
-        echo "Missing dispatch helper: $__ift_pkg_dir/.local/lib/agentic_tactical_boots/dispatch.fish" 1>&2
+    if not test -f "$__ift_pkg_dir/lib/agentic_tactical_boots/dispatch.fish"
+        echo "Missing dispatch helper: $__ift_pkg_dir/lib/agentic_tactical_boots/dispatch.fish" 1>&2
         return 1
     end
 
     for cmd in $__ift_bin_cmds
-        if not test -f "$__ift_pkg_dir/.local/bin/$cmd"
-            echo "Missing wrapper in stow package: $__ift_pkg_dir/.local/bin/$cmd" 1>&2
+        if not test -f "$__ift_pkg_dir/bin/$cmd"
+            echo "Missing wrapper in stow package: $__ift_pkg_dir/bin/$cmd" 1>&2
+            return 1
+        end
+    end
+
+    for conf_file in $__ift_vendor_conf_files
+        if not test -f "$__ift_pkg_dir/share/fish/vendor_conf.d/$conf_file"
+            echo "Missing vendor conf file: $__ift_pkg_dir/share/fish/vendor_conf.d/$conf_file" 1>&2
+            return 1
+        end
+    end
+
+    for cmd in $__ift_vendor_completion_cmds
+        if not test -f "$__ift_pkg_dir/share/fish/vendor_completions.d/$cmd.fish"
+            echo "Missing vendor completion file: $__ift_pkg_dir/share/fish/vendor_completions.d/$cmd.fish" 1>&2
             return 1
         end
     end
@@ -107,8 +157,12 @@ function __ift_install_direct --argument-names target dry_run force
 
     if test "$dry_run" = "true"
         echo "[dry-run] Would ensure directory: $target/.local/bin"
+        echo "[dry-run] Would ensure directory: $target/.local/share/fish/vendor_conf.d"
+        echo "[dry-run] Would ensure directory: $target/.local/share/fish/vendor_completions.d"
     else
         mkdir -p "$target/.local/bin"; or return 1
+        mkdir -p "$target/.local/share/fish/vendor_conf.d"; or return 1
+        mkdir -p "$target/.local/share/fish/vendor_completions.d"; or return 1
     end
 
     for path in (__ift_managed_paths "$target")
@@ -122,7 +176,7 @@ function __ift_install_direct --argument-names target dry_run force
     end
 
     for cmd in $__ift_bin_cmds
-        set -l src "$__ift_pkg_dir/.local/bin/$cmd"
+        set -l src "$__ift_pkg_dir/bin/$cmd"
         set -l dst "$target/.local/bin/$cmd"
         if test "$dry_run" = "true"
             echo "[dry-run] Would copy: $src -> $dst"
@@ -130,6 +184,28 @@ function __ift_install_direct --argument-names target dry_run force
             cp "$src" "$dst"; or return 1
             chmod +x "$dst"; or return 1
             echo "Installed wrapper: $dst"
+        end
+    end
+
+    for conf_file in $__ift_vendor_conf_files
+        set -l src "$__ift_pkg_dir/share/fish/vendor_conf.d/$conf_file"
+        set -l dst "$target/.local/share/fish/vendor_conf.d/$conf_file"
+        if test "$dry_run" = "true"
+            echo "[dry-run] Would copy: $src -> $dst"
+        else
+            cp "$src" "$dst"; or return 1
+            echo "Installed fish vendor conf: $dst"
+        end
+    end
+
+    for cmd in $__ift_vendor_completion_cmds
+        set -l src "$__ift_pkg_dir/share/fish/vendor_completions.d/$cmd.fish"
+        set -l dst "$target/.local/share/fish/vendor_completions.d/$cmd.fish"
+        if test "$dry_run" = "true"
+            echo "[dry-run] Would copy: $src -> $dst"
+        else
+            cp "$src" "$dst"; or return 1
+            echo "Installed fish completion: $dst"
         end
     end
 
@@ -168,23 +244,25 @@ function __ift_install_stow --argument-names target dry_run
 
     __ift_check_sources; or return 1
 
+    set -l stow_target "$target/.local"
+
     if test "$dry_run" = "true"
-        echo "[dry-run] Would ensure directory: $target"
+        echo "[dry-run] Would ensure directory: $stow_target"
     else
-        mkdir -p "$target"; or return 1
+        mkdir -p "$stow_target"; or return 1
     end
 
     if test "$dry_run" = "true"
         __ift_remove_direct "$target" "$dry_run" "false"; or return 1
-        echo "[dry-run] Would run: stow --restow --target $target --dir $__ift_repo_root/stow fish-tools"
+        echo "[dry-run] Would run: stow --restow --target $stow_target --dir $__ift_repo_root/stow fish-tools"
         echo "[dry-run] Would write state file: $__ift_state_file (mode=stow target=$target)"
         return 0
     end
 
     __ift_remove_direct "$target" "false" "false"; or return 1
-    stow --restow --target "$target" --dir "$__ift_repo_root/stow" fish-tools; or return 1
+    stow --restow --target "$stow_target" --dir "$__ift_repo_root/stow" fish-tools; or return 1
     __ift_write_state "stow" "$target"; or return 1
-    echo "Installed via stow at target: $target"
+    echo "Installed via stow at target: $stow_target"
 end
 
 function __ift_uninstall_stow --argument-names target dry_run
@@ -196,10 +274,12 @@ function __ift_uninstall_stow --argument-names target dry_run
         return 0
     end
 
+    set -l stow_target "$target/.local"
+
     if test "$dry_run" = "true"
-        echo "[dry-run] Would run: stow -D --target $target --dir $__ift_repo_root/stow fish-tools"
+        echo "[dry-run] Would run: stow -D --target $stow_target --dir $__ift_repo_root/stow fish-tools"
     else
-        stow -D --target "$target" --dir "$__ift_repo_root/stow" fish-tools
+        stow -D --target "$stow_target" --dir "$__ift_repo_root/stow" fish-tools
     end
 end
 
@@ -234,6 +314,31 @@ function __ift_print_status --argument-names target
             echo "$cmd: missing"
         end
     end
+
+    set -l vendor_conf "$target/.local/share/fish/vendor_conf.d/agentic_tactical_boots.fish"
+    if test -L "$vendor_conf"
+        echo "vendor-conf: symlink ($vendor_conf)"
+    else if test -f "$vendor_conf"
+        if __ift_is_managed "$vendor_conf"
+            echo "vendor-conf: managed file ($vendor_conf)"
+        else
+            echo "vendor-conf: non-managed file ($vendor_conf)"
+        end
+    else
+        echo "vendor-conf: missing"
+    end
+
+    set -l completion_dir "$target/.local/share/fish/vendor_completions.d"
+    set -l completion_count 0
+    for cmd in $__ift_vendor_completion_cmds
+        if test -e "$completion_dir/$cmd.fish"
+            set completion_count (math "$completion_count + 1")
+        end
+    end
+    set -l completion_total (count $__ift_vendor_completion_cmds)
+    echo "vendor-completions: $completion_count/$completion_total present in $completion_dir"
+
+    __ift_print_path_hint "$target"
 end
 
 set -l action "install"
@@ -283,11 +388,20 @@ switch "$action"
         exit 0
     case install
         if command -q stow
-            __ift_install_stow "$target" "$dry_run"; or exit 1
+            if not __ift_install_stow "$target" "$dry_run"
+                echo "Stow install failed; falling back to managed direct wrappers." 1>&2
+                __ift_install_direct "$target" "$dry_run" "$force"; or exit 1
+                if test "$dry_run" != "true"
+                    echo "Installed without stow (fallback mode)."
+                end
+            end
         else
             __ift_install_direct "$target" "$dry_run" "$force"; or exit 1
             echo "Installed without stow (fallback mode)."
             echo "If stow is installed later, wrappers auto-migrate on first run."
+        end
+        if test "$dry_run" != "true"
+            __ift_print_path_hint "$target"
         end
     case uninstall
         __ift_uninstall_stow "$target" "$dry_run"; or exit 1

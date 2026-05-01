@@ -1,0 +1,16 @@
+# managed-by: agentic_tactical_boots/install-fish-tools
+
+complete -c llm-gh-key -f
+complete -c llm-gh-key -n '__fish_use_subcommand' -a 'create create-pair print-ssh-config install-ssh-config uninstall-ssh-config list revoke revoke-by-title revoke-expired help'
+complete -c llm-gh-key -n '__fish_seen_subcommand_from create create-pair list revoke revoke-by-title revoke-expired install-ssh-config uninstall-ssh-config' -l repo -r
+complete -c llm-gh-key -n '__fish_seen_subcommand_from create create-pair' -l access -xa 'ro rw'
+complete -c llm-gh-key -n '__fish_seen_subcommand_from create create-pair' -l ttl -r
+complete -c llm-gh-key -n '__fish_seen_subcommand_from create create-pair install-ssh-config uninstall-ssh-config' -l name -r
+complete -c llm-gh-key -n '__fish_seen_subcommand_from create-pair install-ssh-config' -l install-ssh-config
+complete -c llm-gh-key -n '__fish_seen_subcommand_from print-ssh-config install-ssh-config' -l ro-key -r
+complete -c llm-gh-key -n '__fish_seen_subcommand_from print-ssh-config install-ssh-config' -l rw-key -r
+complete -c llm-gh-key -n '__fish_seen_subcommand_from create-pair install-ssh-config print-ssh-config' -l host-prefix -r
+complete -c llm-gh-key -n '__fish_seen_subcommand_from revoke' -l id -r
+complete -c llm-gh-key -n '__fish_seen_subcommand_from revoke-by-title' -l match -r
+complete -c llm-gh-key -n '__fish_seen_subcommand_from uninstall-ssh-config' -l marker -r
+complete -c llm-gh-key -n '__fish_seen_subcommand_from revoke revoke-by-title revoke-expired uninstall-ssh-config' -l yes

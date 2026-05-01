@@ -39,3 +39,5 @@ Install fish tool shims (stow preferred, direct fallback):
 ```fish
 scripts/install-fish-tools.fish install
 ```
+
+The installer stows into `~/.local` (so shared `~/.local` setups coexist), installs fish vendor config/completions under `~/.local/share/fish`, and prints a `fish_add_path ~/.local/bin` hint when `PATH` is missing that entry.

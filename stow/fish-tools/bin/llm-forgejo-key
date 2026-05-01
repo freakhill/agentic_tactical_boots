@@ -9,5 +9,5 @@ if not test -f "$atb_cfg"
     exit 1
 end
 source "$atb_cfg"
-source "$ATB_REPO_ROOT/stow/fish-tools/.local/lib/agentic_tactical_boots/dispatch.fish"; or exit 1
+source "$ATB_REPO_ROOT/stow/fish-tools/lib/agentic_tactical_boots/dispatch.fish"; or exit 1
 atb-dispatch source "scripts/llm-forgejo-keys.fish" "llm-forgejo-key" $argv

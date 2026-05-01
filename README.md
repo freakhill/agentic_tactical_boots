@@ -30,9 +30,14 @@ scripts/install-fish-tools.fish install --target /path/to/target
 
 How mode selection works:
 
-- If `stow` is available, install uses stow-managed symlinks.
-- If `stow` is unavailable, install falls back to managed direct wrapper files.
+- If `stow` is available, install stows the `fish-tools` package into `~/.local` (coexists with other tools in shared `~/.local`).
+- If `stow` is unavailable or stow install fails, install falls back to managed direct wrapper files.
 - If wrappers were installed directly and `stow` is installed later, first tool run auto-migrates to stow mode.
+- Install also provides fish integration assets in `~/.local/share/fish`:
+  - `vendor_conf.d/agentic_tactical_boots.fish` to auto-load PATH setup in new fish sessions
+  - `vendor_completions.d/*.fish` for command autocompletion
+
+If `~/.local/bin` is not on `PATH`, installer output includes a fish snippet to add it.
 
 Uninstall shims:
 
@@ -695,7 +700,7 @@ Host remains unchanged after VM deletion.
 - `scripts/llm-radicle-access.fish`: manage ephemeral Radicle identities and RID bindings
 - `scripts/install-local-skills.fish`: install repo-versioned skills into local runtime
 - `scripts/install-fish-tools.fish`: install fish command shims (stow preferred, direct fallback)
-- `stow/fish-tools`: stow package for tool command shims under `.local/bin`
+- `stow/fish-tools`: stow package for tool command shims under `.local/{bin,lib}`
 - `skills/agent-sandbox-ops/SKILL.md`: operating workflow for sandbox + network controls
 - `skills/agent-key-lifecycle/SKILL.md`: operating workflow for key and identity lifecycle
 - `examples/forgejo-instances.example.json`: sample multi-instance Forgejo profile file

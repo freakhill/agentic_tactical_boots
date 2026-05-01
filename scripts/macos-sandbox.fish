@@ -77,11 +77,10 @@ function __macos_sandbox_build_profile --argument-names policy root_path
 
     set -l profile
     set -a profile "(version 1)"
-    set -a profile "(deny default)"
+    set -a profile "(import \"system.sb\")"
     set -a profile "(allow process-exec)"
     set -a profile "(allow process-fork)"
     set -a profile "(allow signal (target self))"
-    set -a profile "(allow sysctl-read)"
 
     # Runtime/system reads are required for binaries, dynamic libs, and shell startup.
     for system_path in /System /usr /bin /sbin /Library /private/etc /etc /dev /var/db/timezone
