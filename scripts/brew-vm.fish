@@ -26,24 +26,81 @@ set -g BREW_VM_NETWORK_POLICY "strict-egress"
 set -g BREW_VM_PROXY_URL ""
 set -g BREW_VM_SHARE_DIR "/tmp/llm-share"
 
-function __brew_vm_usage
+function __brew_vm_examples
+    # BEGIN AUTOGEN: examples section="How to sandbox brew with disposable Tart VMs"
+    echo 'Load VM helper:'
+    echo '  source scripts/brew-vm.fish'
+    echo
+    echo 'Create base template once:'
+    echo '  brew-vm create-base'
+    echo
+    echo 'Install formula in disposable VM session:'
+    echo '  set -x BREW_VM_PROXY_URL http://<proxy-host>:3128'
+    echo '  brew-vm install --network-policy strict-egress <formula>'
+    echo
+    echo 'Optional: inspect manually in VM shell:'
+    echo '  set -x BREW_VM_KEEP_SESSION true'
+    echo '  brew-vm install <formula>'
+    echo '  brew-vm shell'
+    echo '  brew-vm destroy'
+    echo
+    echo 'Share files explicitly with host:'
+    echo '  brew-vm copy-in ./local-file.txt /tmp/llm-share/local-file.txt'
+    echo '  brew-vm copy-out /tmp/llm-share/result.txt ./result.txt'
+    echo
+    echo 'Verify policy enforcement:'
+    echo '  brew-vm verify-network'
+    # END AUTOGEN: examples
+end
+
+function __brew_vm_help
+    echo "brew-vm — disposable Tart VM wrapper for Homebrew installs"
+    echo ""
+    echo "Description:"
+    echo "  Each session clones a trusted base VM template, runs brew install"
+    echo "  inside it (strict-egress through a proxy by default), and destroys"
+    echo "  the session VM afterwards. The host stays untouched; explicit"
+    echo "  copy-in/copy-out is the only way to move files in/out."
+    echo ""
     echo "Usage:"
     echo "  source scripts/brew-vm.fish"
-    echo "  brew-vm help"
     echo "  brew-vm create-base"
     echo "  brew-vm init"
-    echo "  brew-vm run [--network-policy strict-egress|proxy-only|off] <command...>"
-    echo "  brew-vm shell [--network-policy strict-egress|proxy-only|off]"
-    echo "  brew-vm install [--network-policy strict-egress|proxy-only|off] <formula>"
+    echo "  brew-vm run [options] <command...>"
+    echo "  brew-vm shell [options]"
+    echo "  brew-vm install [options] <formula>"
     echo "  brew-vm verify-network [--allow-url <url>] [--block-url <url>]"
     echo "  brew-vm copy-in <host-path> <guest-path>"
     echo "  brew-vm copy-out <guest-path> <host-path>"
     echo "  brew-vm destroy"
+    echo "  brew-vm tui                       (interactive launcher; requires gum)"
+    echo "  brew-vm help"
+    echo ""
+    echo "Options:"
+    echo "  --network-policy strict-egress|proxy-only|off"
+    echo "                                    Default: \$BREW_VM_NETWORK_POLICY ($BREW_VM_NETWORK_POLICY)."
+    echo "                                    strict-egress and proxy-only require"
+    echo "                                    BREW_VM_PROXY_URL to be set."
+    echo ""
+    echo "Examples (synced from README → 'How to sandbox brew with disposable Tart VMs'):"
+    __brew_vm_examples
     echo ""
     echo "Notes:"
     echo "  - Host/guest files are NOT auto-shared. Use copy-in/copy-out explicitly."
-    echo "  - Recommended guest share path: $BREW_VM_SHARE_DIR"
-    echo "  - strict-egress/proxy-only require BREW_VM_PROXY_URL to be set."
+    echo "  - Recommended guest share path: $BREW_VM_SHARE_DIR (inside the disposable VM)."
+    echo "  - Set BREW_VM_KEEP_SESSION=true to retain the VM after install for inspection."
+    echo "  - Boot logs are written under \$XDG_STATE_HOME/agentic-tactical-boots/brew-vm/."
+    echo "  - Full reference: README.md → 'How to sandbox brew with disposable Tart VMs'."
+end
+
+function __brew_vm_help_to_stderr
+    __brew_vm_help 1>&2
+end
+
+# Backwards-compatible alias so other scripts (e.g. sandboxctl) that still
+# reference __brew_vm_usage keep working during the rollout.
+function __brew_vm_usage
+    __brew_vm_help
 end
 
 # Keep boolean parsing centralized so policy toggles stay consistent across future
@@ -59,13 +116,33 @@ end
 # Only allow explicit policy values to avoid silent insecure fallback.
 function __brew_vm_validate_policy --argument-names policy
     if not contains -- "$policy" strict-egress proxy-only off
-        echo "Invalid --network-policy: $policy" 1>&2
+        echo "Error: Invalid --network-policy: $policy (allowed: strict-egress, proxy-only, off)" 1>&2
+        echo "" 1>&2
+        __brew_vm_help_to_stderr
         return 1
     end
 end
 
 function __brew_vm_exists --argument-names name
     tart list 2>/dev/null | string match -rq "(^|[[:space:]])$name([[:space:]]|\$)"
+end
+
+# Per-user state dir for host-side artifacts (boot logs, etc.). We deliberately
+# avoid /tmp/<fixed-name> because that pattern is symlink-attack-able on
+# multi-user systems and lets one user clobber another's logs. XDG_STATE_HOME
+# is honored when set; otherwise we fall back to ~/.local/state, mirroring the
+# convention used by stow/install-fish-tools elsewhere in this repo.
+function __brew_vm_state_dir
+    set -l root "$XDG_STATE_HOME"
+    if test -z "$root"
+        set root "$HOME/.local/state"
+    end
+    set -l dir "$root/agentic-tactical-boots/brew-vm"
+    mkdir -p "$dir"; or return 1
+    # Best-effort restrictive perms; ignore errors on filesystems that do not
+    # support chmod (e.g. some network mounts).
+    chmod 700 "$dir" 2>/dev/null
+    echo "$dir"
 end
 
 function __brew_vm_require_tools
@@ -154,7 +231,13 @@ function brew-vm-init --description "Clone and boot disposable brew VM"
 
     if test -z "(__brew_vm_ip)"
         echo "Booting VM: $BREW_VM_SESSION_NAME"
-        tart run --no-graphics "$BREW_VM_SESSION_NAME" >/tmp/brew-vm-$BREW_VM_SESSION_NAME.log 2>&1 &
+        set -l state_dir (__brew_vm_state_dir)
+        if test -z "$state_dir"
+            echo "Failed to prepare brew-vm state directory" 1>&2
+            return 1
+        end
+        set -l log_file "$state_dir/$BREW_VM_SESSION_NAME.log"
+        tart run --no-graphics "$BREW_VM_SESSION_NAME" >"$log_file" 2>&1 &
         disown
     end
 
@@ -335,9 +418,121 @@ function brew-vm-destroy --description "Stop and delete disposable brew VM"
     tart delete "$BREW_VM_SESSION_NAME"
 end
 
+function __brew_vm_show_cli --argument-names cmd
+    gum style --faint "Equivalent CLI:"
+    echo "  $cmd"
+    echo ""
+end
+
+function __brew_vm_tui
+    if not command -sq gum
+        echo "Error: 'gum' is required for the interactive TUI (soft dependency)." 1>&2
+        echo "" 1>&2
+        echo "Install:" 1>&2
+        echo "  brew install gum" 1>&2
+        echo "  https://github.com/charmbracelet/gum#installation" 1>&2
+        echo "" 1>&2
+        echo "Or use the CLI directly. See: brew-vm help" 1>&2
+        return 1
+    end
+
+    while true
+        echo ""
+        gum style --bold --foreground 212 "brew-vm — disposable Tart VM for Homebrew installs"
+        gum style --faint "session VM: $BREW_VM_SESSION_NAME    base template: $BREW_VM_BASE_TEMPLATE"
+        gum style --faint "network policy: $BREW_VM_NETWORK_POLICY    proxy: "(test -n "$BREW_VM_PROXY_URL"; and echo $BREW_VM_PROXY_URL; or echo "(unset)")
+        gum style --faint "(Esc on the menu to quit. Every action prints its equivalent CLI.)"
+        echo ""
+
+        set -l choice (gum choose \
+            "Create base template (one-time)" \
+            "Install a formula (audit + install in disposable VM)" \
+            "Run a one-off command in the session VM" \
+            "Open an SSH shell in the session VM" \
+            "Verify network policy enforcement" \
+            "Copy a file INTO the VM" \
+            "Copy a file OUT of the VM" \
+            "Destroy the session VM" \
+            "Quit")
+
+        if test -z "$choice"
+            return 0
+        end
+
+        echo ""
+        switch "$choice"
+            case "Create base*"
+                __brew_vm_show_cli "brew-vm create-base"
+                if gum confirm --default=true "Run brew-vm create-base now?"
+                    brew-vm create-base
+                end
+            case "Install a formula*"
+                set -l formula (gum input --placeholder "formula name (e.g. wget)" --prompt "formula › ")
+                if test -z "$formula"
+                    continue
+                end
+                __brew_vm_show_cli "brew-vm install --network-policy $BREW_VM_NETWORK_POLICY $formula"
+                if gum confirm --default=true "Install '$formula' in disposable VM?"
+                    brew-vm install --network-policy "$BREW_VM_NETWORK_POLICY" "$formula"
+                end
+            case "Run a one-off*"
+                set -l cmd (gum input --placeholder "command (e.g. brew info wget)" --prompt "command › ")
+                if test -z "$cmd"
+                    continue
+                end
+                __brew_vm_show_cli "brew-vm run --network-policy $BREW_VM_NETWORK_POLICY $cmd"
+                if gum confirm --default=true "Run '$cmd' in VM?"
+                    brew-vm run --network-policy "$BREW_VM_NETWORK_POLICY" $cmd
+                end
+            case "Open an SSH*"
+                __brew_vm_show_cli "brew-vm shell --network-policy $BREW_VM_NETWORK_POLICY"
+                if gum confirm --default=true "Open SSH shell in VM?"
+                    brew-vm shell --network-policy "$BREW_VM_NETWORK_POLICY"
+                end
+            case "Verify network*"
+                __brew_vm_show_cli "brew-vm verify-network"
+                brew-vm verify-network
+            case "Copy a file INTO*"
+                set -l src (gum input --placeholder "host path" --prompt "host › ")
+                if test -z "$src"
+                    continue
+                end
+                set -l dst (gum input --placeholder "guest path" --prompt "guest › " --value="$BREW_VM_SHARE_DIR/")
+                if test -z "$dst"
+                    continue
+                end
+                __brew_vm_show_cli "brew-vm copy-in $src $dst"
+                if gum confirm --default=true "Copy $src → VM:$dst ?"
+                    brew-vm copy-in "$src" "$dst"
+                end
+            case "Copy a file OUT*"
+                set -l src (gum input --placeholder "guest path" --prompt "guest › " --value="$BREW_VM_SHARE_DIR/")
+                if test -z "$src"
+                    continue
+                end
+                set -l dst (gum input --placeholder "host path" --prompt "host › ")
+                if test -z "$dst"
+                    continue
+                end
+                __brew_vm_show_cli "brew-vm copy-out $src $dst"
+                if gum confirm --default=true "Copy VM:$src → $dst ?"
+                    brew-vm copy-out "$src" "$dst"
+                end
+            case "Destroy*"
+                gum style --foreground 196 --bold "DESTRUCTIVE: stops + deletes the session VM '$BREW_VM_SESSION_NAME'."
+                __brew_vm_show_cli "brew-vm destroy"
+                if gum confirm --default=false "Really destroy session VM?"
+                    brew-vm destroy
+                end
+            case "Quit"
+                return 0
+        end
+    end
+end
+
 function brew-vm --description "Unified wrapper for brew VM sandbox operations"
     if test (count $argv) -eq 0
-        __brew_vm_usage
+        __brew_vm_help
         return 0
     end
 
@@ -346,7 +541,10 @@ function brew-vm --description "Unified wrapper for brew VM sandbox operations"
 
     switch "$cmd"
         case help --help -h
-            __brew_vm_usage
+            __brew_vm_help
+        case tui
+            __brew_vm_tui
+            return $status
         case create-base
             brew-vm-create-base
         case init
@@ -371,8 +569,9 @@ function brew-vm --description "Unified wrapper for brew VM sandbox operations"
         case destroy
             brew-vm-destroy
         case '*'
-            echo "Unknown command: $cmd" 1>&2
-            __brew_vm_usage
+            echo "Error: Unknown command: $cmd" 1>&2
+            echo "" 1>&2
+            __brew_vm_help_to_stderr
             return 1
     end
 end

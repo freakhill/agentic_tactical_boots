@@ -41,4 +41,25 @@ function test_unknown_command_fails
     assert_contains "brew-vm unknown cmd message" "$out" "Unknown command"
 end
 
+function test_help_advertises_tui
+    set -l out (__invoke help)
+    assert_contains "brew-vm help mentions tui" "$out" "brew-vm tui"
+    assert_contains "brew-vm help mentions Examples" "$out" "Examples"
+end
+
+function test_tui_without_gum_prints_install_hint
+    set -l tmp (mk_tmpdir)
+    mkdir -p "$tmp/bin"
+    set -l body "
+        set -x PATH '$tmp/bin'
+        source '$SCRIPT'
+        brew-vm tui
+    "
+    set -l out (command fish -N -c "$body" 2>&1)
+    set -l rc $status
+    assert_eq "brew-vm tui no-gum fails" $rc 1
+    assert_contains "brew-vm tui no-gum mentions gum" "$out" "gum"
+    assert_contains "brew-vm tui no-gum suggests brew install" "$out" "brew install gum"
+end
+
 run_tests_in_file (basename (status filename))
