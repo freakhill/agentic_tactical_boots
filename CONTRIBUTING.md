@@ -17,15 +17,28 @@ Before editing code or docs, read:
 - Add comments that explain **why**, not obvious shell syntax.
 - Include official documentation links in script headers when behavior is non-obvious.
 
-## Skills and Docs Sync Policy
+## Python via uv
 
-When changing any script under `scripts/` that affects behavior, flags, workflows, or defaults, update all relevant docs in the same change:
+Any Python invoked from this repo must run under `uv` so the interpreter and
+dependencies are pinned and reproducible across machines.
+
+- Helpers for fish scripts live in `scripts/_py/*.py` and start with PEP-723
+  inline metadata (`requires-python`, `dependencies`).
+- Fish wrappers call them as `uv run --script "$HELPER_PY" <subcommand> ...`.
+- New Python work follows the same pattern. Do not introduce bare
+  `python3 -c '...'` snippets or list `python3` as a required tool.
+
+## Skills, Docs, and Tests Sync Policy
+
+When changing any script under `scripts/` that affects behavior, flags, workflows, or defaults, update all relevant docs **and tests** in the same change:
 
 - `README.md`
 - Related skill files under `skills/*/SKILL.md`
 - `skills/README.md` if install/use guidance changes
+- `tests/test_<script>.fish` for changed/added subcommands, flags, or error paths
+- `scripts/_py/<helper>.py` and `tests/test_py_helpers.fish` when the Python helper contract changes
 
-Do not merge behavior changes where skills/docs are stale.
+Do not merge behavior changes where skills, docs, or tests are stale.
 
 ## Verification
 
@@ -33,6 +46,7 @@ Run at least:
 
 ```fish
 fish -n scripts/*.fish
+fish tests/run.fish
 ```
 
 For command-surface changes, also verify help output paths still work.

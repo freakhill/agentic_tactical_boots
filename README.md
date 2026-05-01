@@ -1,5 +1,11 @@
 # Appropriate footwear for Agentic workflows
 
+[![Tests](https://github.com/freakhill/agentic_tactical_boots/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/freakhill/agentic_tactical_boots/actions/workflows/tests.yml?query=branch%3Amain+is%3Asuccess)
+
+The badge shows the current state of the test suite on `main`. Click it to see
+the list of successful runs on `main` — the topmost entry is the last commit
+that passed CI.
+
 Local scripts and docs for running agent workflows with stronger isolation defaults:
 
 - container sandbox helpers
@@ -53,13 +59,32 @@ Before edits, read:
 2. `agents.md`
 3. `scripts/CONVENTIONS.md`
 
-When changing `scripts/*.fish`, keep docs and skills synchronized in the same change:
+When changing `scripts/*.fish`, keep docs, skills, **and tests** synchronized in the same change:
 
 - `README.md`
 - affected `skills/*/SKILL.md`
 - `skills/README.md` when usage/install guidance changes
+- `tests/test_<script>.fish` for new/changed subcommands, flags, or error paths
+- `scripts/_py/<helper>.py` and `tests/test_py_helpers.fish` when the Python helper contract changes
 
 CI enforces this via `.github/workflows/script-doc-sync-check.yml`.
+
+Run the test suite locally with:
+
+```fish
+fish tests/run.fish
+```
+
+### Python helpers run via `uv`
+
+The `scripts/llm-*.fish` wrappers delegate JSON, datetime, and state-file work
+to small Python helpers in `scripts/_py/llm_*.py`. Each helper carries
+PEP-723 inline metadata (`requires-python`, `dependencies`) and is invoked as
+`uv run --script "$HELPER_PY" <subcommand> ...` from fish. This keeps the
+Python interpreter version pinned per helper and avoids relying on whatever
+`python3` happens to be on `$PATH`. **`uv` is therefore a hard dependency of
+the `llm-*` workflows; `python3` is not.** Any new Python work in this repo
+must follow the same pattern (no bare `python3 -c '...'`).
 
 ## LLM Agent Sandboxing on macOS (fish shell)
 
@@ -698,6 +723,7 @@ Host remains unchanged after VM deletion.
 - `scripts/llm-github-keys.fish`: generate/revoke ephemeral GitHub deploy keys
 - `scripts/llm-forgejo-keys.fish`: generate/revoke ephemeral Forgejo deploy keys (multi-instance)
 - `scripts/llm-radicle-access.fish`: manage ephemeral Radicle identities and RID bindings
+- `scripts/_py/llm_*.py`: pinned-Python helpers for the three `llm-*.fish` scripts (run via `uv run --script`, PEP-723 inline metadata)
 - `scripts/install-local-skills.fish`: install repo-versioned skills into local runtime
 - `scripts/install-fish-tools.fish`: install fish command shims (stow preferred, direct fallback)
 - `stow/fish-tools`: stow package for tool command shims under `.local/{bin,lib}`
@@ -822,9 +848,15 @@ Expected: no `brew-sandbox-session` VM remains unless `BREW_VM_KEEP_SESSION=true
 - Workflow file: `.github/workflows/sandbox-images-check.yml`
 - Builds both `agent` and `agent-tools` services
 
-11. Confirm CI enforces script/docs/skills synchronization:
+11. Confirm CI enforces script/docs/skills/tests synchronization:
 
 - Workflow file: `.github/workflows/script-doc-sync-check.yml`
-- Rule: when `scripts/*.fish` changes, corresponding updates must include:
+- Rule: when `scripts/*.fish` **or** `scripts/_py/*.py` changes, corresponding updates must include:
   - `README.md`
   - `skills/*/SKILL.md` or `skills/README.md`
+  - `tests/*.fish`
+
+12. Confirm CI runs the test suite:
+
+- Workflow file: `.github/workflows/tests.yml`
+- Runs `fish tests/run.fish` on Ubuntu for every PR and push to `main`

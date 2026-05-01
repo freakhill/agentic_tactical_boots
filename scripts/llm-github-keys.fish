@@ -16,6 +16,9 @@
 set -g LLM_GH_KEY_PREFIX "llm-agent"
 set -g LLM_GH_KEY_DIR "$HOME/.ssh"
 set -g LLM_GH_KEY_TTL "24h"
+# Python helpers are run via uv with PEP-723 inline metadata so the interpreter
+# version and dependency set are pinned at the script level. See scripts/_py/.
+set -g LLM_GH_PY (path resolve (dirname (status filename)))"/_py/llm_github_keys.py"
 
 function __llm_gh_usage
     echo "Usage:"
@@ -119,33 +122,7 @@ function __llm_gh_uninstall_config --argument-names repo name marker yes
         return 1
     end
 
-    set -l result (python3 -c 'import pathlib,re,sys
-cfg=pathlib.Path(sys.argv[1])
-pattern=re.compile(sys.argv[2])
-lines=cfg.read_text().splitlines()
-out=[]
-skip=False
-removed=[]
-marker=""
-for line in lines:
-    if line.startswith("# BEGIN "):
-        m=line[len("# BEGIN "):].strip()
-        if pattern.search(m):
-            skip=True
-            marker=m
-            removed.append(m)
-            continue
-    if skip:
-        if marker and line.strip()==f"# END {marker}":
-            skip=False
-            marker=""
-        continue
-    out.append(line)
-cfg.write_text("\n".join(out).rstrip()+"\n" if out else "")
-print(len(removed))
-for m in removed:
-    print(m)
-' "$config_file" "$pattern")
+    set -l result (uv run --script "$LLM_GH_PY" ssh-config-uninstall "$config_file" "$pattern")
 
     set -l removed_count "$result[1]"
     if test "$removed_count" = "0"
@@ -160,7 +137,8 @@ for m in removed:
 end
 
 function __llm_gh_require_tools
-    for tool in gh ssh-keygen python3
+    # uv replaces bare python3 so the helper interpreter is pinned via PEP-723.
+    for tool in gh ssh-keygen uv
         if not command -sq "$tool"
             echo "Missing required tool: $tool" 1>&2
             return 1
@@ -187,7 +165,7 @@ function __llm_gh_ttl_to_iso --argument-names ttl
         return 1
     end
 
-    python3 -c 'import datetime,re,sys; t=sys.argv[1]; n,u=re.fullmatch(r"(\d+)([mhdw])",t).groups(); n=int(n); m={"m":"minutes","h":"hours","d":"days","w":"weeks"}; dt=datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(**{m[u]:n}); print(dt.replace(microsecond=0).isoformat().replace("+00:00","Z"))' "$ttl"
+    uv run --script "$LLM_GH_PY" ttl-to-iso "$ttl"
 end
 
 function __llm_gh_generate_key --argument-names access name expiry
@@ -504,7 +482,7 @@ function llm-gh-key --description "Manage ephemeral GitHub deploy keys for LLM a
             __llm_gh_validate_repo "$repo"; or return 1
 
             set -l keys_json (gh api "repos/$repo/keys")
-            set -l ids (printf "%s\n" "$keys_json" | python3 -c 'import json,re,sys; p=re.compile(sys.argv[1]); data=json.load(sys.stdin); print("\n".join(str(k["id"]) for k in data if p.search(k.get("title",""))))' "$pattern")
+            set -l ids (printf "%s\n" "$keys_json" | uv run --script "$LLM_GH_PY" filter-by-title "$pattern")
 
             if not __llm_gh_confirm "Revoke matching deploy keys from $repo?" "$yes"
                 return 1
@@ -521,16 +499,7 @@ function llm-gh-key --description "Manage ephemeral GitHub deploy keys for LLM a
             __llm_gh_validate_repo "$repo"; or return 1
 
             set -l keys_json (gh api "repos/$repo/keys")
-            set -l ids (printf "%s\n" "$keys_json" | python3 -c 'import datetime,json,re,sys; now=datetime.datetime.now(datetime.timezone.utc); data=json.load(sys.stdin); out=[]; rx=re.compile(r"(?:^|:)exp=([0-9T:\-]+Z)");
-for k in data:
-    t=k.get("title","")
-    m=rx.search(t)
-    if not m:
-        continue
-    exp=datetime.datetime.fromisoformat(m.group(1).replace("Z","+00:00"))
-    if exp <= now:
-        out.append(str(k["id"]))
-print("\n".join(out))')
+            set -l ids (printf "%s\n" "$keys_json" | uv run --script "$LLM_GH_PY" filter-expired)
 
             if not __llm_gh_confirm "Revoke expired deploy keys from $repo?" "$yes"
                 return 1

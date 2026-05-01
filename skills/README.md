@@ -10,11 +10,13 @@ Before updating any skill, read:
 2. `agents.md`
 3. `scripts/CONVENTIONS.md`
 
-When script behavior changes, keep skills and docs in sync in the same change:
+When script behavior changes, keep skills, docs, and tests in sync in the same change:
 
 - `README.md`
 - affected `skills/*/SKILL.md`
 - this file when install/usage guidance changes
+- `tests/test_*.fish` for any changed argv handling, flags, or error paths
+- `scripts/_py/*.py` if the script's Python helper contract changes (Python work is uv-managed; never reintroduce bare `python3`)
 
 Install:
 

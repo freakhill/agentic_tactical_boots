@@ -25,6 +25,19 @@ This folder uses a single operational style to keep scripts easy to read, modify
 - For VM workflows, prefer explicit file transfer (`copy-in`/`copy-out`) over broad host mounts.
 - For key lifecycle workflows, prefer short-lived credentials and clear revocation paths.
 
+## Python helpers via uv
+
+When a fish script needs Python, place the logic in `scripts/_py/<name>.py`
+with PEP-723 inline metadata pinning the interpreter, and call it as
+`uv run --script "$HELPER_PY" <subcommand> ...` from the fish wrapper.
+List `uv` (not `python3`) in the wrapper's `__require_tools` check.
+
+Path discovery: compute the helper path with
+`set -g <NAME>_PY (path resolve (dirname (status filename)))"/_py/<name>.py"`
+at source time. Do **not** use the `(cd (dirname (status filename)); pwd)`
+pattern — fish's command substitution is not a subshell, so the `cd`
+silently changes the caller's working directory.
+
 ## Parameter naming standards
 
 Use these names consistently where applicable:
@@ -43,6 +56,7 @@ If a domain requires custom identifiers (for example `--rid`), keep aliases wher
 ## Validation checklist before merge
 
 1. `fish -n scripts/*.fish`
-2. Run each script's help path (`<script> --help` or equivalent)
-3. For network-related scripts, run at least one allow and one block verification path
-4. Confirm docs reference any new commands/options
+2. `fish tests/run.fish`
+3. Run each script's help path (`<script> --help` or equivalent)
+4. For network-related scripts, run at least one allow and one block verification path
+5. Confirm docs and `tests/test_<script>.fish` reference any new commands/options

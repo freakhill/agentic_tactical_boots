@@ -3,3 +3,6 @@ examples/agent-tools.env
 
 # macOS metadata
 .DS_Store
+
+# Claude Code per-machine settings (project-wide settings.json is fine to commit)
+.claude/settings.local.json

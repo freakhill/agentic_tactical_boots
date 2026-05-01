@@ -37,13 +37,16 @@ jobs:
           echo "Changed files:"
           printf '%s\n' "$CHANGED_FILES"
 
-          if ! printf '%s\n' "$CHANGED_FILES" | grep -Eq '^scripts/.*\.fish$'; then
-            echo "No fish script changes detected; sync check not required."
+          # Any change under scripts/*.fish OR scripts/_py/*.py is a behavior
+          # change that must keep README/skills/tests in sync.
+          if ! printf '%s\n' "$CHANGED_FILES" | grep -Eq '^scripts/.*\.fish$|^scripts/_py/.*\.py$'; then
+            echo "No script changes detected; sync check not required."
             exit 0
           fi
 
           DOC_CHANGED=false
           SKILL_CHANGED=false
+          TESTS_CHANGED=false
 
           if printf '%s\n' "$CHANGED_FILES" | grep -Eq '^README\.md$'; then
             DOC_CHANGED=true
@@ -53,12 +56,17 @@ jobs:
             SKILL_CHANGED=true
           fi
 
-          if [[ "$DOC_CHANGED" != true || "$SKILL_CHANGED" != true ]]; then
-            echo "Script change detected without required docs/skills updates." >&2
-            echo "Required with scripts/*.fish changes:" >&2
-            echo "  - README.md" >&2
-            echo "  - skills/*/SKILL.md or skills/README.md" >&2
+          if printf '%s\n' "$CHANGED_FILES" | grep -Eq '^tests/.*\.fish$'; then
+            TESTS_CHANGED=true
+          fi
+
+          if [[ "$DOC_CHANGED" != true || "$SKILL_CHANGED" != true || "$TESTS_CHANGED" != true ]]; then
+            echo "Script change detected without required sync updates." >&2
+            echo "Required with scripts/*.fish or scripts/_py/*.py changes:" >&2
+            echo "  - README.md"                                  >&2
+            echo "  - skills/*/SKILL.md or skills/README.md"      >&2
+            echo "  - tests/*.fish"                               >&2
             exit 1
           fi
 
-          echo "Script/docs/skills sync check passed."
+          echo "Script/docs/skills/tests sync check passed."

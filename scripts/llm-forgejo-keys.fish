@@ -15,7 +15,9 @@ set -g LLM_FORGEJO_KEY_DIR "$HOME/.ssh"
 set -g LLM_FORGEJO_KEY_TTL "24h"
 set -g LLM_FORGEJO_CONFIG_DIR "$HOME/.config/llm-key-tools"
 set -g LLM_FORGEJO_INSTANCES_FILE "$LLM_FORGEJO_CONFIG_DIR/forgejo-instances.json"
-set -g LLM_FORGEJO_TEMPLATE_FILE (dirname (status filename))/../examples/forgejo-instances.example.json
+set -g LLM_FORGEJO_TEMPLATE_FILE (path resolve (dirname (status filename)))/../examples/forgejo-instances.example.json
+# Python helpers run via uv with PEP-723 inline metadata. See scripts/_py/.
+set -g LLM_FORGEJO_PY (path resolve (dirname (status filename)))"/_py/llm_forgejo_keys.py"
 
 function __llm_forgejo_usage
     echo "Usage:"
@@ -59,7 +61,8 @@ function __llm_forgejo_bootstrap_config --argument-names force
 end
 
 function __llm_forgejo_require_tools
-    for tool in curl python3 ssh-keygen
+    # uv replaces bare python3 so the helper interpreter is pinned via PEP-723.
+    for tool in curl uv ssh-keygen
         if not command -sq "$tool"
             echo "Missing required tool: $tool" 1>&2
             return 1
@@ -80,7 +83,7 @@ function __llm_forgejo_ttl_to_iso --argument-names ttl
         return 1
     end
 
-    python3 -c 'import datetime,re,sys; t=sys.argv[1]; n,u=re.fullmatch(r"(\d+)([mhdw])",t).groups(); n=int(n); m={"m":"minutes","h":"hours","d":"days","w":"weeks"}; dt=datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(**{m[u]:n}); print(dt.replace(microsecond=0).isoformat().replace("+00:00","Z"))' "$ttl"
+    uv run --script "$LLM_FORGEJO_PY" ttl-to-iso "$ttl"
 end
 
 function __llm_forgejo_repo_slug --argument-names repo
@@ -88,7 +91,7 @@ function __llm_forgejo_repo_slug --argument-names repo
 end
 
 function __llm_forgejo_host_from_url --argument-names url
-    python3 -c 'import sys,urllib.parse; u=urllib.parse.urlparse(sys.argv[1]); print(u.hostname or "")' "$url"
+    uv run --script "$LLM_FORGEJO_PY" host-from-url "$url"
 end
 
 function __llm_forgejo_normalize_url --argument-names url
@@ -111,13 +114,7 @@ function __llm_forgejo_instance_set --argument-names name url token_env
     __llm_forgejo_ensure_instance_file
     set -l norm_url (__llm_forgejo_normalize_url "$url")
 
-    python3 -c 'import json, pathlib, sys
-path = pathlib.Path(sys.argv[1])
-name, url, token_env = sys.argv[2], sys.argv[3], sys.argv[4]
-doc = json.loads(path.read_text())
-doc.setdefault("instances", {})[name] = {"url": url, "token_env": token_env}
-path.write_text(json.dumps(doc, indent=2) + "\n")
-' "$LLM_FORGEJO_INSTANCES_FILE" "$name" "$norm_url" "$token_env"
+    uv run --script "$LLM_FORGEJO_PY" instance-set "$LLM_FORGEJO_INSTANCES_FILE" "$name" "$norm_url" "$token_env"
 
     echo "Saved Forgejo instance profile: $name"
     echo "  url: $norm_url"
@@ -126,17 +123,7 @@ end
 
 function __llm_forgejo_instance_list
     __llm_forgejo_ensure_instance_file
-    python3 -c 'import json, pathlib, sys
-path = pathlib.Path(sys.argv[1])
-doc = json.loads(path.read_text())
-inst = doc.get("instances", {})
-if not inst:
-    print("No Forgejo instance profiles configured.")
-    raise SystemExit(0)
-print("name\turl\ttoken_env")
-for name, cfg in sorted(inst.items()):
-    print("{}\t{}\t{}".format(name, cfg.get("url", ""), cfg.get("token_env", "")))
-' "$LLM_FORGEJO_INSTANCES_FILE"
+    uv run --script "$LLM_FORGEJO_PY" instance-list "$LLM_FORGEJO_INSTANCES_FILE"
 end
 
 function __llm_forgejo_instance_remove --argument-names name
@@ -146,18 +133,7 @@ function __llm_forgejo_instance_remove --argument-names name
     end
 
     __llm_forgejo_ensure_instance_file
-    python3 -c 'import json, pathlib, sys
-path = pathlib.Path(sys.argv[1])
-name = sys.argv[2]
-doc = json.loads(path.read_text())
-inst = doc.get("instances", {})
-if name in inst:
-    del inst[name]
-    path.write_text(json.dumps(doc, indent=2) + "\n")
-    print(f"Removed Forgejo instance profile: {name}")
-else:
-    print(f"Instance profile not found: {name}")
-' "$LLM_FORGEJO_INSTANCES_FILE" "$name"
+    uv run --script "$LLM_FORGEJO_PY" instance-remove "$LLM_FORGEJO_INSTANCES_FILE" "$name"
 end
 
 function __llm_forgejo_resolve_connection --argument-names instance forgejo_url token_env
@@ -177,15 +153,7 @@ function __llm_forgejo_resolve_connection --argument-names instance forgejo_url 
         end
 
         __llm_forgejo_ensure_instance_file
-        set -l line (python3 -c 'import json,pathlib,sys
-path=pathlib.Path(sys.argv[1])
-name=sys.argv[2]
-doc=json.loads(path.read_text())
-cfg=doc.get("instances",{}).get(name)
-if not cfg:
-    raise SystemExit(1)
-print((cfg.get("url") or "") + "\t" + (cfg.get("token_env") or ""))
-' "$LLM_FORGEJO_INSTANCES_FILE" "$instance")
+        set -l line (uv run --script "$LLM_FORGEJO_PY" instance-get "$LLM_FORGEJO_INSTANCES_FILE" "$instance")
 
         if test $status -ne 0; or test -z "$line"
             echo "Unknown instance profile: $instance" 1>&2
@@ -268,13 +236,13 @@ function __llm_forgejo_create_deploy_key --argument-names repo title pub access
         set read_only false
     end
 
-    set -l payload (python3 -c 'import json,sys; print(json.dumps({"title":sys.argv[1],"key":sys.argv[2],"read_only":sys.argv[3]=="true"}))' "$title" "$pub" "$read_only")
+    set -l payload (uv run --script "$LLM_FORGEJO_PY" make-payload "$title" "$pub" "$read_only")
     set -l resp (__llm_forgejo_api POST "repos/$repo/keys" "$payload")
     if test $status -ne 0
         return 1
     end
 
-    echo "$resp" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))'
+    echo "$resp" | uv run --script "$LLM_FORGEJO_PY" parse-key-id
 end
 
 function __llm_forgejo_create_one --argument-names repo access ttl name
@@ -337,12 +305,7 @@ function __llm_forgejo_list --argument-names repo
         return 1
     end
 
-    echo "$resp" | python3 -c 'import json,sys
-data=json.load(sys.stdin)
-for k in data:
-    acc="ro" if k.get("read_only",True) else "rw"
-    print("{}\t{}\t{}\t{}".format(k.get("id", ""), acc, k.get("created_at", ""), k.get("title", "")))
-'
+    echo "$resp" | uv run --script "$LLM_FORGEJO_PY" list-keys
 end
 
 function __llm_forgejo_revoke_by_ids --argument-names repo ids
@@ -435,33 +398,7 @@ function __llm_forgejo_uninstall_config --argument-names repo name marker yes
         return 1
     end
 
-    set -l result (python3 -c 'import pathlib,re,sys
-cfg=pathlib.Path(sys.argv[1])
-pattern=re.compile(sys.argv[2])
-lines=cfg.read_text().splitlines()
-out=[]
-skip=False
-removed=[]
-marker=""
-for line in lines:
-    if line.startswith("# BEGIN "):
-        m=line[len("# BEGIN "):].strip()
-        if pattern.search(m):
-            skip=True
-            marker=m
-            removed.append(m)
-            continue
-    if skip:
-        if marker and line.strip()==f"# END {marker}":
-            skip=False
-            marker=""
-        continue
-    out.append(line)
-cfg.write_text("\n".join(out).rstrip()+"\n" if out else "")
-print(len(removed))
-for m in removed:
-    print(m)
-' "$config_file" "$pattern")
+    set -l result (uv run --script "$LLM_FORGEJO_PY" ssh-config-uninstall "$config_file" "$pattern")
 
     if test "$result[1]" = "0"
         echo "No matching SSH config blocks found."
@@ -628,7 +565,7 @@ function llm-forgejo-key --description "Manage ephemeral Forgejo deploy keys for
             __llm_forgejo_resolve_connection "$instance" "$forgejo_url" "$token_env"; or return 1
 
             set -l keys_json (__llm_forgejo_api GET "repos/$repo/keys" "")
-            set -l ids (printf "%s\n" "$keys_json" | python3 -c 'import json,re,sys; p=re.compile(sys.argv[1]); data=json.load(sys.stdin); print("\n".join(str(k.get("id")) for k in data if p.search(k.get("title",""))))' "$pattern")
+            set -l ids (printf "%s\n" "$keys_json" | uv run --script "$LLM_FORGEJO_PY" filter-by-title "$pattern")
             if not __llm_forgejo_confirm "Revoke matching deploy keys from $repo?" "$yes"
                 return 1
             end
@@ -640,15 +577,7 @@ function llm-forgejo-key --description "Manage ephemeral Forgejo deploy keys for
             __llm_forgejo_resolve_connection "$instance" "$forgejo_url" "$token_env"; or return 1
 
             set -l keys_json (__llm_forgejo_api GET "repos/$repo/keys" "")
-            set -l ids (printf "%s\n" "$keys_json" | python3 -c 'import datetime,json,re,sys; now=datetime.datetime.now(datetime.timezone.utc); data=json.load(sys.stdin); out=[]; rx=re.compile(r"(?:^|:)exp=([0-9T:\-]+Z)");
-for k in data:
-    m=rx.search(k.get("title",""))
-    if not m:
-        continue
-    exp=datetime.datetime.fromisoformat(m.group(1).replace("Z","+00:00"))
-    if exp <= now:
-        out.append(str(k.get("id")))
-print("\n".join(out))')
+            set -l ids (printf "%s\n" "$keys_json" | uv run --script "$LLM_FORGEJO_PY" filter-expired)
             if not __llm_forgejo_confirm "Revoke expired deploy keys from $repo?" "$yes"
                 return 1
             end

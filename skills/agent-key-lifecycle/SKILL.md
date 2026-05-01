@@ -24,6 +24,17 @@ Before executing this skill, read:
 - Forgejo: `scripts/llm-forgejo-keys.fish` (`llm-forgejo-key ...`)
 - Radicle: `scripts/llm-radicle-access.fish` (`llm-radicle-access ...`)
 
+The fish wrappers above delegate JSON / state / datetime work to small Python
+helpers under `scripts/_py/llm_*.py`. Each helper carries PEP-723 inline
+metadata pinning the interpreter, and is invoked via `uv run --script`.
+
+## Required tools
+
+- `ssh-keygen` (everywhere)
+- `gh` (GitHub workflow only)
+- `curl` (Forgejo workflow only)
+- `uv` (everywhere — runs the pinned Python helpers; replaces bare `python3`)
+
 ## Defaults
 
 1. Use separate RO and RW credentials.
@@ -67,3 +78,5 @@ If you change key/identity script behavior, update in the same task:
 - this skill file
 - any other affected skill under `skills/*/SKILL.md`
 - `skills/README.md` when installation/usage guidance changes
+- `tests/test_llm_*.fish` and `tests/test_py_helpers.fish` for changed argv or error paths
+- `scripts/_py/llm_*.py` if the JSON / state / datetime contract changes (and never reintroduce bare `python3` — keep things uv-managed)

@@ -17,7 +17,9 @@ set -g LLM_RADICLE_KEY_DIR "$HOME/.ssh"
 set -g LLM_RADICLE_TTL "24h"
 set -g LLM_RADICLE_CONFIG_DIR "$HOME/.config/llm-key-tools"
 set -g LLM_RADICLE_STATE_FILE "$LLM_RADICLE_CONFIG_DIR/radicle-access.json"
-set -g LLM_RADICLE_TEMPLATE_FILE (dirname (status filename))/../examples/radicle-access-policy.example.json
+set -g LLM_RADICLE_TEMPLATE_FILE (path resolve (dirname (status filename)))/../examples/radicle-access-policy.example.json
+# Python helpers run via uv with PEP-723 inline metadata. See scripts/_py/.
+set -g LLM_RADICLE_PY (path resolve (dirname (status filename)))"/_py/llm_radicle_access.py"
 
 function __llm_rad_usage
     echo "Usage:"
@@ -57,7 +59,8 @@ function __llm_rad_bootstrap_config --argument-names force
 end
 
 function __llm_rad_require_tools
-    for tool in python3 ssh-keygen
+    # uv replaces bare python3 so the helper interpreter is pinned via PEP-723.
+    for tool in uv ssh-keygen
         if not command -sq "$tool"
             echo "Missing required tool: $tool" 1>&2
             return 1
@@ -93,7 +96,7 @@ function __llm_rad_ttl_to_iso --argument-names ttl
         return 1
     end
 
-    python3 -c 'import datetime,re,sys; t=sys.argv[1]; n,u=re.fullmatch(r"(\d+)([mhdw])",t).groups(); n=int(n); m={"m":"minutes","h":"hours","d":"days","w":"weeks"}; dt=datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(**{m[u]:n}); print(dt.replace(microsecond=0).isoformat().replace("+00:00","Z"))' "$ttl"
+    uv run --script "$LLM_RADICLE_PY" ttl-to-iso "$ttl"
 end
 
 function __llm_rad_validate_access --argument-names access
@@ -114,7 +117,7 @@ function __llm_rad_generate_identity_key --argument-names name expiry
     # ed25519 + higher KDF rounds for local key hardening.
     set -l stamp (date -u +%Y%m%dT%H%M%SZ)
     set -l safe_name (string replace -ra '[^a-zA-Z0-9._-]' '-' -- "$name")
-    set -l ident_id "rid-"$stamp"-"(python3 -c 'import uuid; print(uuid.uuid4().hex[:8])')
+    set -l ident_id "rid-"$stamp"-"(uv run --script "$LLM_RADICLE_PY" uuid8)
     set -l key_path "$LLM_RADICLE_KEY_DIR/llm_agent_radicle_"$safe_name"_"$stamp
     set -l comment "$LLM_RADICLE_PREFIX:radicle:"$safe_name":exp="$expiry
 
@@ -139,168 +142,52 @@ end
 
 function __llm_rad_append_identity --argument-names ident_id name key_path pub_path expiry
     __llm_rad_ensure_state
-    python3 -c 'import datetime,json,pathlib,sys
-path=pathlib.Path(sys.argv[1])
-ident_id,name,key_path,pub_path,expiry=sys.argv[2:7]
-doc=json.loads(path.read_text())
-now=datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00","Z")
-doc.setdefault("identities",[]).append({
-  "id": ident_id,
-  "name": name,
-  "key_path": key_path,
-  "pub_path": pub_path,
-  "created_at": now,
-  "expires_at": expiry,
-  "status": "active"
-})
-path.write_text(json.dumps(doc, indent=2) + "\n")
-' "$LLM_RADICLE_STATE_FILE" "$ident_id" "$name" "$key_path" "$pub_path" "$expiry"
+    uv run --script "$LLM_RADICLE_PY" append-identity "$LLM_RADICLE_STATE_FILE" "$ident_id" "$name" "$key_path" "$pub_path" "$expiry"
 end
 
 function __llm_rad_list_identities --argument-names show_all
     __llm_rad_ensure_state
-    python3 -c 'import json,pathlib,sys
-path=pathlib.Path(sys.argv[1])
-show_all=sys.argv[2]=="true"
-doc=json.loads(path.read_text())
-print("id\tstatus\texpires_at\tname\tkey_path")
-for i in doc.get("identities",[]):
-    if not show_all and i.get("status")!="active":
-        continue
-    print("{}\t{}\t{}\t{}\t{}".format(i.get("id", ""), i.get("status", ""), i.get("expires_at", ""), i.get("name", ""), i.get("key_path", "")))
-' "$LLM_RADICLE_STATE_FILE" "$show_all"
+    if test "$show_all" = "true"
+        uv run --script "$LLM_RADICLE_PY" list-identities "$LLM_RADICLE_STATE_FILE" --show-all
+    else
+        uv run --script "$LLM_RADICLE_PY" list-identities "$LLM_RADICLE_STATE_FILE"
+    end
 end
 
 function __llm_rad_retire_identity --argument-names ident_id
     __llm_rad_ensure_state
-    python3 -c 'import datetime,json,pathlib,sys
-path=pathlib.Path(sys.argv[1])
-ident_id=sys.argv[2]
-doc=json.loads(path.read_text())
-now=datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00","Z")
-found=False
-for i in doc.get("identities",[]):
-    if i.get("id")==ident_id:
-        i["status"]="retired"
-        i["retired_at"]=now
-        found=True
-if not found:
-    raise SystemExit(1)
-path.write_text(json.dumps(doc, indent=2) + "\n")
-' "$LLM_RADICLE_STATE_FILE" "$ident_id"
+    uv run --script "$LLM_RADICLE_PY" retire-identity "$LLM_RADICLE_STATE_FILE" "$ident_id"
 end
 
 function __llm_rad_retire_expired
     __llm_rad_ensure_state
-    python3 -c 'import datetime,json,pathlib,sys
-path=pathlib.Path(sys.argv[1])
-doc=json.loads(path.read_text())
-now=datetime.datetime.now(datetime.timezone.utc)
-changed=[]
-for i in doc.get("identities",[]):
-    if i.get("status")!="active":
-        continue
-    exp=i.get("expires_at")
-    if not exp:
-        continue
-    dt=datetime.datetime.fromisoformat(exp.replace("Z","+00:00"))
-    if dt <= now:
-        i["status"]="retired"
-        i["retired_at"]=now.replace(microsecond=0).isoformat().replace("+00:00","Z")
-        changed.append(i.get("id",""))
-path.write_text(json.dumps(doc, indent=2) + "\n")
-print("\n".join(changed))
-' "$LLM_RADICLE_STATE_FILE"
+    uv run --script "$LLM_RADICLE_PY" retire-expired "$LLM_RADICLE_STATE_FILE"
 end
 
 function __llm_rad_bind_repo --argument-names rid ident_id access note
     # Bindings are explicit (RID, identity, access) so multi-repo intent is
     # machine-readable and easy to rotate/review.
     __llm_rad_ensure_state
-    python3 -c 'import datetime,json,pathlib,sys
-path=pathlib.Path(sys.argv[1])
-rid,ident_id,access,note=sys.argv[2:6]
-doc=json.loads(path.read_text())
-idents={i.get("id"): i for i in doc.get("identities",[])}
-ident=idents.get(ident_id)
-if not ident or ident.get("status")!="active":
-    raise SystemExit(2)
-now=datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00","Z")
-bindings=doc.setdefault("bindings",[])
-for b in bindings:
-    if b.get("rid")==rid and b.get("identity_id")==ident_id:
-        b["access"]=access
-        b["note"]=note
-        b["status"]="active"
-        b["updated_at"]=now
-        path.write_text(json.dumps(doc, indent=2) + "\n")
-        print("updated")
-        raise SystemExit(0)
-bindings.append({
-  "rid": rid,
-  "identity_id": ident_id,
-  "access": access,
-  "note": note,
-  "status": "active",
-  "created_at": now
-})
-path.write_text(json.dumps(doc, indent=2) + "\n")
-print("created")
-' "$LLM_RADICLE_STATE_FILE" "$rid" "$ident_id" "$access" "$note"
+    uv run --script "$LLM_RADICLE_PY" bind-repo "$LLM_RADICLE_STATE_FILE" "$rid" "$ident_id" "$access" "$note"
 end
 
 function __llm_rad_list_bindings --argument-names rid show_all
     __llm_rad_ensure_state
-    python3 -c 'import json,pathlib,sys
-path=pathlib.Path(sys.argv[1])
-rid=sys.argv[2]
-show_all=sys.argv[3]=="true"
-doc=json.loads(path.read_text())
-print("rid\tidentity_id\taccess\tstatus\tnote")
-for b in doc.get("bindings",[]):
-    if rid and b.get("rid")!=rid:
-        continue
-    if not show_all and b.get("status")!="active":
-        continue
-    print("{}\t{}\t{}\t{}\t{}".format(b.get("rid", ""), b.get("identity_id", ""), b.get("access", ""), b.get("status", ""), b.get("note", "")))
-' "$LLM_RADICLE_STATE_FILE" "$rid" "$show_all"
+    if test "$show_all" = "true"
+        uv run --script "$LLM_RADICLE_PY" list-bindings "$LLM_RADICLE_STATE_FILE" "$rid" --show-all
+    else
+        uv run --script "$LLM_RADICLE_PY" list-bindings "$LLM_RADICLE_STATE_FILE" "$rid"
+    end
 end
 
 function __llm_rad_unbind_repo --argument-names rid ident_id
     __llm_rad_ensure_state
-    python3 -c 'import datetime,json,pathlib,sys
-path=pathlib.Path(sys.argv[1])
-rid,ident_id=sys.argv[2],sys.argv[3]
-doc=json.loads(path.read_text())
-now=datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00","Z")
-changed=[]
-for b in doc.get("bindings",[]):
-    if b.get("rid")!=rid:
-        continue
-    if ident_id and b.get("identity_id")!=ident_id:
-        continue
-    if b.get("status")!="active":
-        continue
-    b["status"]="retired"
-    b["retired_at"]=now
-    changed.append("{}:{}".format(b.get("rid", ""), b.get("identity_id", "")))
-path.write_text(json.dumps(doc, indent=2) + "\n")
-print("\n".join(changed))
-' "$LLM_RADICLE_STATE_FILE" "$rid" "$ident_id"
+    uv run --script "$LLM_RADICLE_PY" unbind-repo "$LLM_RADICLE_STATE_FILE" "$rid" "$ident_id"
 end
 
 function __llm_rad_print_env --argument-names ident_id
     __llm_rad_ensure_state
-    set -l line (python3 -c 'import json,pathlib,sys
-path=pathlib.Path(sys.argv[1])
-ident_id=sys.argv[2]
-doc=json.loads(path.read_text())
-for i in doc.get("identities",[]):
-    if i.get("id")==ident_id and i.get("status")=="active":
-        print(i.get("key_path",""))
-        raise SystemExit(0)
-raise SystemExit(1)
-' "$LLM_RADICLE_STATE_FILE" "$ident_id")
+    set -l line (uv run --script "$LLM_RADICLE_PY" get-active-key "$LLM_RADICLE_STATE_FILE" "$ident_id")
 
     if test $status -ne 0; or test -z "$line"
         echo "Active identity not found: $ident_id" 1>&2
