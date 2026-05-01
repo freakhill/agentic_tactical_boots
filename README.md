@@ -41,36 +41,54 @@ llm-gh-key tui                 # per-tool TUI; soft-deps on gum
 
 ## Install fish command shims
 
-Install command shims into `~/.local/bin` (default target is `$HOME`):
+Install writes a single fish auto-loaded snippet:
 
 ```fish
 scripts/install-fish-tools.fish install
 ```
 
-Use a custom target directory:
+What this does:
+
+- Generates `~/.config/fish/conf.d/agentic_tactical_boots.fish`. Fish sources
+  it on every shell startup, so commands like `slop`, `sandboxctl`,
+  `llm-gh-key`, `agent-sandbox`, `brew-vm`, etc. are available in every new
+  fish session — no `~/.local/bin` shims, no `PATH` manipulation.
+- The snippet `source`s "module" scripts that define functions, and wraps
+  "standalone" scripts (those with top-level code) as thin functions that
+  exec them with `command fish`.
+- Auto-loads completion files from `scripts/completions/`.
+- Bakes the absolute repo root into the snippet so it is self-contained.
+- Re-runs are idempotent — re-execute any time to regenerate the snippet.
+
+After install, run `exec fish` (or open a new shell) to load the snippet.
+
+Use a custom snippet directory:
 
 ```fish
-scripts/install-fish-tools.fish install --target /path/to/target
+scripts/install-fish-tools.fish install --conf-dir /path/to/conf.d
 ```
 
-How mode selection works:
+Verify install state:
 
-- If `stow` is available, install stows the `fish-tools` package into `~/.local` (coexists with other tools in shared `~/.local`).
-- If `stow` is unavailable or stow install fails, install falls back to managed direct wrapper files.
-- If wrappers were installed directly and `stow` is installed later, first tool run auto-migrates to stow mode.
-- Install also provides fish integration assets in `~/.local/share/fish`:
-  - `vendor_conf.d/agentic_tactical_boots.fish` to auto-load PATH setup in new fish sessions
-  - `vendor_completions.d/*.fish` for command autocompletion
+```fish
+scripts/install-fish-tools.fish status
+```
 
-Re-running `install` is safe and idempotent. The cleanup phase that removes stale managed files explicitly skips paths whose parent directory is a symlink (typical of a previous stow install with tree folding), so it cannot follow the symlink and delete files in the repo's stow source tree.
-
-If `~/.local/bin` is not on `PATH`, installer output includes a fish snippet to add it.
-
-Uninstall shims:
+Uninstall:
 
 ```fish
 scripts/install-fish-tools.fish uninstall
 ```
+
+### Cleanup of legacy installs
+
+If you previously used the older bin-shim/stow installer, the new install
+detects and removes its artifacts on first run: `~/.local/bin/<our-tools>`,
+`~/.local/share/fish/vendor_conf.d/agentic_tactical_boots.fish`,
+`~/.local/share/fish/vendor_completions.d/<our-tools>.fish`,
+`~/.config/agentic_tactical_boots/fish-tools.env`, and any
+`~/.local/.local` tree-fold symlink left behind by stow. Pass
+`--no-cleanup` to opt out.
 
 ## Contributor policy (important)
 

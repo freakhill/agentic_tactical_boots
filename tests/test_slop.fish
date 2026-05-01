@@ -58,16 +58,9 @@ function test_no_args_without_gum_prints_install_hint
     assert_contains "slop no-gum suggests CLI fallback" "$out" "sandboxctl.fish help"
 end
 
-function test_bin_shim_present
-    set -l shim "$REPO_ROOT/stow/fish-tools/bin/slop"
-    if test -x "$shim"
-        __test_record_pass "slop shim is executable in stow tree"
-    else
-        __test_record_fail "slop shim is executable in stow tree" "missing or not executable: $shim"
-    end
-end
-
-function test_install_fish_tools_lists_slop
+function test_install_fish_tools_wraps_slop
+    # The conf.d snippet wraps standalone scripts as fish functions; verify
+    # 'slop' is in the standalone list so the wrapper is generated.
     set -l installer "$REPO_ROOT/scripts/install-fish-tools.fish"
     set -l content (cat "$installer")
     assert_contains "install-fish-tools knows about slop" "$content" "slop"

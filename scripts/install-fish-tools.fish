@@ -1,86 +1,96 @@
 #!/usr/bin/env fish
 
 # Purpose:
-# - Install repo tool shims into fish-friendly command paths.
-# - Prefer GNU Stow for git-synced symlink management, with direct-copy fallback.
+# - Install repo fish scripts into the user's fish configuration via a single
+#   ~/.config/fish/conf.d/ snippet, so commands are available in every fish
+#   session without bin shims or PATH manipulation.
+# - Drops the older approach (bin shims + GNU Stow + dispatcher), which had
+#   sharp edges around stow tree-folding.
+# - Cleans up artifacts of the older install on first run.
 #
-# Safety/model notes:
-# - Only managed wrapper files are replaced/removed unless --force is provided.
-# - Installer records state so direct installs can auto-migrate to stow later.
+# Why conf.d:
+# - fish's conf.d is auto-sourced on every shell startup; idiomatic for
+#   distributing project commands without polluting the user's PATH.
 #
 # References:
-# - GNU Stow manual: https://www.gnu.org/software/stow/manual/stow.html
-# - Fish docs: https://fishshell.com/docs/current/
+# - fish init: https://fishshell.com/docs/current/language.html#initialization-files
 
 set -g __ift_marker "managed-by: agentic_tactical_boots/install-fish-tools"
 set -g __ift_repo_root (cd (dirname (status filename))/..; pwd)
-set -g __ift_pkg_dir "$__ift_repo_root/stow/fish-tools"
-set -g __ift_default_target "$HOME"
-set -g __ift_state_dir "$HOME/.config/agentic_tactical_boots"
-set -g __ift_state_file "$__ift_state_dir/fish-tools.env"
-set -g __ift_bin_cmds \
-    sandboxctl \
+set -g __ift_default_conf_dir "$HOME/.config/fish/conf.d"
+set -g __ift_snippet_basename "agentic_tactical_boots.fish"
+
+# Module scripts: define functions with no top-level side-effects, so they
+# are safe to source into every fish session at startup.
+set -g __ift_module_scripts \
     agent-sandbox \
     agent-sandbox-tools \
     macos-sandbox \
     brew-vm \
-    llm-gh-key \
-    llm-forgejo-key \
+    llm-github-keys \
+    llm-forgejo-keys \
     llm-radicle-access \
     safe-npm-install \
-    safe-uv \
+    safe-uv-install
+
+# Standalone scripts: have top-level code that runs immediately, so they
+# cannot be sourced. Each gets a thin wrapper function in the snippet.
+set -g __ift_standalone_scripts \
+    sandboxctl \
+    slop \
     check-pinning \
-    slop
-set -g __ift_vendor_conf_files \
-    agentic_tactical_boots.fish
-set -g __ift_vendor_completion_cmds \
-    sandboxctl \
-    agent-sandbox \
-    agent-sandbox-tools \
-    macos-sandbox \
-    brew-vm \
-    llm-gh-key \
-    llm-forgejo-key \
-    llm-radicle-access \
-    safe-npm-install \
-    safe-uv
+    sync-help-from-readme \
+    install-fish-tools \
+    install-local-skills
+
+# Legacy paths cleaned up on first run. The first three were created by the
+# previous bin-shim/stow installer; the fourth is the bogus tree-fold
+# symlink that motivated this rewrite.
+set -g __ift_legacy_bin_cmds \
+    sandboxctl agent-sandbox agent-sandbox-tools macos-sandbox brew-vm \
+    llm-gh-key llm-forgejo-key llm-radicle-access safe-npm-install safe-uv \
+    check-pinning slop atb-tui
 
 function __ift_examples
     # BEGIN AUTOGEN: examples section="Install fish command shims"
     echo '  scripts/install-fish-tools.fish install'
-    echo '  scripts/install-fish-tools.fish install --target /path/to/target'
+    echo '  scripts/install-fish-tools.fish install --conf-dir /path/to/conf.d'
+    echo '  scripts/install-fish-tools.fish status'
     echo '  scripts/install-fish-tools.fish uninstall'
     # END AUTOGEN: examples
 end
 
 function __ift_help
-    echo "install-fish-tools — install repo command shims (stow preferred, direct fallback)"
+    echo "install-fish-tools — install repo fish scripts via ~/.config/fish/conf.d"
     echo ""
     echo "Description:"
-    echo "  Installs the bin/ shims and fish vendor assets from this repo into a"
-    echo "  target directory (default: \$HOME, so commands land in ~/.local/bin)."
-    echo "  Uses GNU Stow when available; falls back to managed direct copies"
-    echo "  otherwise. Re-running 'install' is idempotent and safe."
+    echo "  Generates a fish conf.d snippet that sources every script in this"
+    echo "  repo's scripts/ directory into your fish session. Commands like"
+    echo "  'slop', 'sandboxctl', and 'llm-gh-key' become available in every"
+    echo "  new fish shell with no bin shims and no PATH manipulation. Re-run"
+    echo "  any time to refresh the snippet."
     echo ""
     echo "Usage:"
     echo "  scripts/install-fish-tools.fish install [options]"
     echo "  scripts/install-fish-tools.fish uninstall [options]"
-    echo "  scripts/install-fish-tools.fish status [--target <dir>]"
+    echo "  scripts/install-fish-tools.fish status [--conf-dir <dir>]"
     echo "  scripts/install-fish-tools.fish help"
     echo ""
     echo "Options:"
-    echo "  --target <dir>    Absolute install root (default: \$HOME)."
-    echo "  --dry-run         Print what would happen without writing."
-    echo "  --force           Replace conflicting files / re-stow."
+    echo "  --conf-dir <dir>   Snippet location. Default: $__ift_default_conf_dir"
+    echo "  --dry-run          Print what would happen; write nothing."
+    echo "  --no-cleanup       Skip removal of legacy ~/.local/bin/ shims and"
+    echo "                     associated vendor files from the previous installer."
     echo ""
     echo "Examples (synced from README → 'Install fish command shims'):"
     __ift_examples
     echo ""
     echo "Notes:"
-    echo "  - Default target installs commands under ~/.local/bin."
-    echo "  - Stow is preferred when available; direct-copy mode is fallback only."
-    echo "  - Installer includes fish vendor_conf/vendor_completions under ~/.local/share/fish."
-    echo "  - If ~/.local/bin is missing from PATH, install/status print a fish snippet to add it."
+    echo "  - Restart your shell or run 'exec fish' after install to pick up the snippet."
+    echo "  - The snippet sources module scripts and wraps standalone ones so they"
+    echo "    can be invoked by name from any fish session."
+    echo "  - Completions hosted under scripts/completions/ are auto-loaded too."
+    echo "  - Legacy bin shims under ~/.local/bin/ are removed unless --no-cleanup."
     echo "  - Full reference: README.md → 'Install fish command shims'."
 end
 
@@ -88,350 +98,253 @@ function __ift_help_to_stderr
     __ift_help 1>&2
 end
 
-function __ift_usage
-    __ift_help
+function __ift_snippet_path --argument-names conf_dir
+    echo "$conf_dir/$__ift_snippet_basename"
 end
 
-function __ift_path_contains --argument-names needle
-    contains -- "$needle" $PATH
-end
+# Render the conf.d snippet as a fish-quoted string. The repo root is baked
+# in so the snippet is self-contained — moving it to another machine just
+# requires re-running install there to update the path.
+function __ift_render_snippet
+    set -l rr (string escape -- "$__ift_repo_root")
 
-function __ift_print_path_hint --argument-names target
-    set -l bin_path "$target/.local/bin"
-    if __ift_path_contains "$bin_path"
-        return 0
+    echo "# $__ift_marker"
+    echo "# Auto-generated by scripts/install-fish-tools.fish."
+    echo "# Safe to delete or re-run install to regenerate."
+    echo ""
+    echo "set -gx ATB_REPO_ROOT $rr"
+    echo ""
+    echo "# Module scripts (define functions, no top-level side effects)."
+    echo "for __atb_m in \\"
+    set -l n (count $__ift_module_scripts)
+    for i in (seq $n)
+        set -l name $__ift_module_scripts[$i]
+        if test $i -eq $n
+            echo "    $name"
+        else
+            echo "    $name \\"
+        end
     end
-
-    echo "PATH warning: $bin_path is not in PATH."
-    echo "Add this to your fish config (~/.config/fish/config.fish):"
-    echo "  fish_add_path $bin_path"
+    echo "    set -l __atb_p \"\$ATB_REPO_ROOT/scripts/\$__atb_m.fish\""
+    echo "    if test -f \"\$__atb_p\""
+    echo "        source \"\$__atb_p\""
+    echo "    end"
+    echo "end"
+    echo "set -e __atb_m"
+    echo ""
+    echo "# Wrapper functions for standalone scripts (have top-level code)."
+    for s in $__ift_standalone_scripts
+        echo "function $s --description '$__ift_marker'"
+        echo "    command fish \"\$ATB_REPO_ROOT/scripts/$s.fish\" \$argv"
+        echo "end"
+    end
+    echo ""
+    echo "# Completions hosted in the repo."
+    echo "for __atb_c in \$ATB_REPO_ROOT/scripts/completions/*.fish"
+    echo "    if test -f \"\$__atb_c\""
+    echo "        source \"\$__atb_c\""
+    echo "    end"
+    echo "end"
+    echo "set -e __atb_c"
 end
 
-function __ift_is_managed --argument-names path
+# Detect the snippet at the given conf_dir and confirm it is one of ours.
+function __ift_is_managed_snippet --argument-names path
     if not test -f "$path"
         return 1
     end
     grep -q "$__ift_marker" "$path"
 end
 
-function __ift_write_state --argument-names mode target
-    mkdir -p "$__ift_state_dir"; or return 1
-    printf 'set -gx ATB_REPO_ROOT %s\n' (string escape -- "$__ift_repo_root") > "$__ift_state_file"
-    printf 'set -gx ATB_INSTALL_MODE %s\n' (string escape -- "$mode") >> "$__ift_state_file"
-    printf 'set -gx ATB_TARGET %s\n' (string escape -- "$target") >> "$__ift_state_file"
-end
+# Cleanup legacy install artifacts. Returns 0 always; prints actions.
+function __ift_cleanup_legacy --argument-names target dry_run
+    set -l removed 0
 
-function __ift_managed_paths --argument-names target
-    set -l out
-    for cmd in $__ift_bin_cmds
-        set out $out "$target/.local/bin/$cmd"
-    end
-    for conf_file in $__ift_vendor_conf_files
-        set out $out "$target/.local/share/fish/vendor_conf.d/$conf_file"
-    end
-    for cmd in $__ift_vendor_completion_cmds
-        set out $out "$target/.local/share/fish/vendor_completions.d/$cmd.fish"
-    end
-    printf '%s\n' $out
-end
-
-function __ift_check_sources
-    if not test -d "$__ift_pkg_dir/bin"
-        echo "Missing stow package bin dir: $__ift_pkg_dir/bin" 1>&2
-        return 1
-    end
-
-    if not test -f "$__ift_pkg_dir/lib/agentic_tactical_boots/dispatch.fish"
-        echo "Missing dispatch helper: $__ift_pkg_dir/lib/agentic_tactical_boots/dispatch.fish" 1>&2
-        return 1
-    end
-
-    for cmd in $__ift_bin_cmds
-        if not test -f "$__ift_pkg_dir/bin/$cmd"
-            echo "Missing wrapper in stow package: $__ift_pkg_dir/bin/$cmd" 1>&2
-            return 1
-        end
-    end
-
-    for conf_file in $__ift_vendor_conf_files
-        if not test -f "$__ift_pkg_dir/share/fish/vendor_conf.d/$conf_file"
-            echo "Missing vendor conf file: $__ift_pkg_dir/share/fish/vendor_conf.d/$conf_file" 1>&2
-            return 1
-        end
-    end
-
-    for cmd in $__ift_vendor_completion_cmds
-        if not test -f "$__ift_pkg_dir/share/fish/vendor_completions.d/$cmd.fish"
-            echo "Missing vendor completion file: $__ift_pkg_dir/share/fish/vendor_completions.d/$cmd.fish" 1>&2
-            return 1
-        end
-    end
-end
-
-function __ift_install_direct --argument-names target dry_run force
-    __ift_check_sources; or return 1
-
-    set -l conflicts 0
-    for path in (__ift_managed_paths "$target")
-        if test -e "$path"
-            if test "$force" = "true"
-                continue
-            end
-            if not __ift_is_managed "$path"
-                echo "Conflict (not managed): $path" 1>&2
-                set conflicts 1
-            end
-        end
-    end
-
-    if test "$conflicts" -eq 1
-        echo "Use --force to replace conflicting files." 1>&2
-        return 1
-    end
-
-    if test "$dry_run" = "true"
-        echo "[dry-run] Would ensure directory: $target/.local/bin"
-        echo "[dry-run] Would ensure directory: $target/.local/share/fish/vendor_conf.d"
-        echo "[dry-run] Would ensure directory: $target/.local/share/fish/vendor_completions.d"
-    else
-        mkdir -p "$target/.local/bin"; or return 1
-        mkdir -p "$target/.local/share/fish/vendor_conf.d"; or return 1
-        mkdir -p "$target/.local/share/fish/vendor_completions.d"; or return 1
-    end
-
-    for path in (__ift_managed_paths "$target")
-        if test -e "$path"
-            # Same symlinked-parent guard as __ift_remove_direct: never follow
-            # a stow tree-folded directory symlink and accidentally write or
-            # delete inside the symlink target. If we hit this in install,
-            # bail loudly — direct-mode install into a stow-managed tree is
-            # ambiguous and the user should `uninstall` first.
-            set -l parent (dirname "$path")
-            if test -L "$parent"
-                echo "Refusing to install over a symlinked parent dir: $parent" 1>&2
-                echo "Run 'scripts/install-fish-tools.fish uninstall' first to clear the previous stow install." 1>&2
-                return 1
-            end
-
+    set -l legacy_bin "$target/.local/bin"
+    for cmd in $__ift_legacy_bin_cmds
+        set -l shim "$legacy_bin/$cmd"
+        if test -e "$shim"; or test -L "$shim"
             if test "$dry_run" = "true"
-                echo "[dry-run] Would remove existing managed file: $path"
+                echo "[dry-run] Would remove legacy bin shim: $shim"
             else
-                rm -f "$path"; or return 1
+                rm -f "$shim"
+                echo "Removed legacy bin shim: $shim"
             end
+            set removed (math "$removed + 1")
         end
     end
 
-    for cmd in $__ift_bin_cmds
-        set -l src "$__ift_pkg_dir/bin/$cmd"
-        set -l dst "$target/.local/bin/$cmd"
+    set -l legacy_conf "$target/.local/share/fish/vendor_conf.d/agentic_tactical_boots.fish"
+    if test -e "$legacy_conf"
         if test "$dry_run" = "true"
-            echo "[dry-run] Would copy: $src -> $dst"
+            echo "[dry-run] Would remove legacy vendor_conf: $legacy_conf"
         else
-            cp "$src" "$dst"; or return 1
-            chmod +x "$dst"; or return 1
-            echo "Installed wrapper: $dst"
+            rm -f "$legacy_conf"
+            echo "Removed legacy vendor_conf: $legacy_conf"
         end
+        set removed (math "$removed + 1")
     end
 
-    for conf_file in $__ift_vendor_conf_files
-        set -l src "$__ift_pkg_dir/share/fish/vendor_conf.d/$conf_file"
-        set -l dst "$target/.local/share/fish/vendor_conf.d/$conf_file"
-        if test "$dry_run" = "true"
-            echo "[dry-run] Would copy: $src -> $dst"
-        else
-            cp "$src" "$dst"; or return 1
-            echo "Installed fish vendor conf: $dst"
-        end
-    end
-
-    for cmd in $__ift_vendor_completion_cmds
-        set -l src "$__ift_pkg_dir/share/fish/vendor_completions.d/$cmd.fish"
-        set -l dst "$target/.local/share/fish/vendor_completions.d/$cmd.fish"
-        if test "$dry_run" = "true"
-            echo "[dry-run] Would copy: $src -> $dst"
-        else
-            cp "$src" "$dst"; or return 1
-            echo "Installed fish completion: $dst"
-        end
-    end
-
-    if test "$dry_run" = "true"
-        echo "[dry-run] Would write state file: $__ift_state_file (mode=direct target=$target)"
-    else
-        __ift_write_state "direct" "$target"; or return 1
-    end
-end
-
-function __ift_remove_direct --argument-names target dry_run force
-    for path in (__ift_managed_paths "$target")
-        if not test -e "$path"
-            continue
-        end
-
-        # Why this guard exists:
-        # When the previous install ran in stow mode, stow performs "tree
-        # folding": instead of populating $target/.local/share/fish/<dir>/
-        # with per-file symlinks, it makes the whole <dir> itself a symlink
-        # into the repo's stow source. A managed path under such a folded
-        # dir is reached via that symlink and resolves to the source file
-        # in the repo. `rm -f $path` follows the parent symlink and would
-        # delete the source file. Direct-mode wrappers, by definition,
-        # live in real directories we created — so a symlinked parent is
-        # always someone else's territory and must be skipped.
-        set -l parent (dirname "$path")
-        if test -L "$parent"
+    set -l legacy_compl_dir "$target/.local/share/fish/vendor_completions.d"
+    for cmd in $__ift_legacy_bin_cmds
+        set -l f "$legacy_compl_dir/$cmd.fish"
+        if test -e "$f"
             if test "$dry_run" = "true"
-                echo "[dry-run] Skipping (parent is a symlink, owned by stow): $path"
-            end
-            continue
-        end
-
-        if __ift_is_managed "$path"; or test "$force" = "true"
-            if test "$dry_run" = "true"
-                echo "[dry-run] Would remove: $path"
+                echo "[dry-run] Would remove legacy completion: $f"
             else
-                rm -f "$path"; or return 1
-                echo "Removed: $path"
+                rm -f "$f"
+                echo "Removed legacy completion: $f"
             end
-        else
-            echo "Skipping non-managed file: $path" 1>&2
+            set removed (math "$removed + 1")
         end
     end
 
+    # The bogus ~/.local/.local symlink left behind by stow tree-folding
+    # against a corrupt source tree. Only remove if it is a symlink (never
+    # follow into a real dir, which could be intentional user state).
+    set -l bogus "$target/.local/.local"
+    if test -L "$bogus"
+        if test "$dry_run" = "true"
+            echo "[dry-run] Would remove bogus tree-fold symlink: $bogus"
+        else
+            rm -f "$bogus"
+            echo "Removed bogus tree-fold symlink: $bogus"
+        end
+        set removed (math "$removed + 1")
+    end
+
+    # Old installer state file is no longer used; remove it so users do not
+    # think there is still something half-installed under ~/.local.
+    set -l legacy_state "$target/.config/agentic_tactical_boots/fish-tools.env"
+    if test -f "$legacy_state"
+        if test "$dry_run" = "true"
+            echo "[dry-run] Would remove legacy state file: $legacy_state"
+        else
+            rm -f "$legacy_state"
+            echo "Removed legacy state file: $legacy_state"
+        end
+        set removed (math "$removed + 1")
+    end
+
+    if test $removed -eq 0
+        echo "No legacy install artifacts found."
+    end
+    return 0
 end
 
-function __ift_install_stow --argument-names target dry_run
-    if not command -q stow
-        echo "stow is not installed; cannot use stow mode." 1>&2
-        return 1
-    end
+function __ift_install --argument-names conf_dir dry_run no_cleanup
+    set -l snippet (__ift_snippet_path "$conf_dir")
+    set -l rendered (__ift_render_snippet)
 
-    __ift_check_sources; or return 1
-
-    set -l stow_target "$target/.local"
-
-    if test "$dry_run" = "true"
-        echo "[dry-run] Would ensure directory: $stow_target"
-    else
-        mkdir -p "$stow_target"; or return 1
+    if test "$no_cleanup" != "true"
+        __ift_cleanup_legacy "$HOME" "$dry_run"
     end
 
     if test "$dry_run" = "true"
-        __ift_remove_direct "$target" "$dry_run" "false"; or return 1
-        echo "[dry-run] Would run: stow --restow --target $stow_target --dir $__ift_repo_root/stow fish-tools"
-        echo "[dry-run] Would write state file: $__ift_state_file (mode=stow target=$target)"
+        echo "[dry-run] Would ensure directory: $conf_dir"
+        echo "[dry-run] Would write snippet: $snippet"
+        echo "[dry-run] Snippet preview:"
+        printf '%s\n' $rendered | sed 's/^/    /'
         return 0
     end
 
-    __ift_remove_direct "$target" "false" "false"; or return 1
-    stow --restow --target "$stow_target" --dir "$__ift_repo_root/stow" fish-tools; or return 1
-    __ift_write_state "stow" "$target"; or return 1
-    echo "Installed via stow at target: $stow_target"
+    mkdir -p "$conf_dir"; or return 1
+    printf '%s\n' $rendered > "$snippet"; or return 1
+    chmod 644 "$snippet" 2>/dev/null
+
+    echo "Installed snippet: $snippet"
+    echo "Run 'exec fish' or open a new shell to load it."
 end
 
-function __ift_uninstall_stow --argument-names target dry_run
-    if not command -q stow
-        if test "$dry_run" = "true"
-            echo "[dry-run] stow not installed; would skip stow uninstall and remove direct wrappers only."
-            return 0
-        end
+function __ift_uninstall --argument-names conf_dir dry_run
+    set -l snippet (__ift_snippet_path "$conf_dir")
+
+    if not test -e "$snippet"
+        echo "No snippet found at: $snippet"
         return 0
     end
 
-    set -l stow_target "$target/.local"
+    if not __ift_is_managed_snippet "$snippet"
+        echo "Refusing to remove unmanaged file (no marker): $snippet" 1>&2
+        return 1
+    end
 
     if test "$dry_run" = "true"
-        echo "[dry-run] Would run: stow -D --target $stow_target --dir $__ift_repo_root/stow fish-tools"
-    else
-        stow -D --target "$stow_target" --dir "$__ift_repo_root/stow" fish-tools
+        echo "[dry-run] Would remove snippet: $snippet"
+        return 0
     end
+
+    rm -f "$snippet"; or return 1
+    echo "Removed snippet: $snippet"
+    echo "Run 'exec fish' or open a new shell so the change takes effect."
 end
 
-function __ift_print_status --argument-names target
-    echo "Repo root: $__ift_repo_root"
-    echo "Target: $target"
+function __ift_status --argument-names conf_dir
+    set -l snippet (__ift_snippet_path "$conf_dir")
 
-    if command -q stow
-        echo "Stow: available"
-    else
-        echo "Stow: not found"
-    end
-
-    if test -f "$__ift_state_file"
-        source "$__ift_state_file"
-        echo "State: mode=$ATB_INSTALL_MODE target=$ATB_TARGET"
-    else
-        echo "State: not initialized"
-    end
-
-    for cmd in $__ift_bin_cmds
-        set -l path "$target/.local/bin/$cmd"
-        if test -L "$path"
-            echo "$cmd: symlink ($path)"
-        else if test -f "$path"
-            if __ift_is_managed "$path"
-                echo "$cmd: managed file ($path)"
-            else
-                echo "$cmd: non-managed file ($path)"
+    echo "snippet path:      $snippet"
+    if test -f "$snippet"
+        if __ift_is_managed_snippet "$snippet"
+            set -l ts (stat -f '%Sm' -t '%Y-%m-%dT%H:%M:%SZ' "$snippet" 2>/dev/null)
+            if test -z "$ts"
+                set ts (stat -c '%y' "$snippet" 2>/dev/null)
             end
+            echo "snippet status:    installed ($ts)"
         else
-            echo "$cmd: missing"
-        end
-    end
-
-    set -l vendor_conf "$target/.local/share/fish/vendor_conf.d/agentic_tactical_boots.fish"
-    if test -L "$vendor_conf"
-        echo "vendor-conf: symlink ($vendor_conf)"
-    else if test -f "$vendor_conf"
-        if __ift_is_managed "$vendor_conf"
-            echo "vendor-conf: managed file ($vendor_conf)"
-        else
-            echo "vendor-conf: non-managed file ($vendor_conf)"
+            echo "snippet status:    PRESENT BUT NOT MANAGED (no marker)"
         end
     else
-        echo "vendor-conf: missing"
+        echo "snippet status:    not installed"
     end
 
-    set -l completion_dir "$target/.local/share/fish/vendor_completions.d"
-    set -l completion_count 0
-    for cmd in $__ift_vendor_completion_cmds
-        if test -e "$completion_dir/$cmd.fish"
-            set completion_count (math "$completion_count + 1")
+    set -l legacy_bin_present 0
+    for cmd in $__ift_legacy_bin_cmds
+        if test -e "$HOME/.local/bin/$cmd"; or test -L "$HOME/.local/bin/$cmd"
+            set legacy_bin_present (math "$legacy_bin_present + 1")
         end
     end
-    set -l completion_total (count $__ift_vendor_completion_cmds)
-    echo "vendor-completions: $completion_count/$completion_total present in $completion_dir"
+    if test $legacy_bin_present -gt 0
+        echo "legacy bin shims:  $legacy_bin_present present (install will clean these up)"
+    else
+        echo "legacy bin shims:  none"
+    end
 
-    __ift_print_path_hint "$target"
+    if test -L "$HOME/.local/.local"
+        echo "tree-fold symlink: PRESENT at ~/.local/.local (install will remove it)"
+    end
 end
 
-set -l action "install"
-set -l target "$__ift_default_target"
+# Entry point.
+set -l action ""
+set -l conf_dir "$__ift_default_conf_dir"
 set -l dry_run "false"
-set -l force "false"
+set -l no_cleanup "false"
 
 set -l i 1
 while test $i -le (count $argv)
     set -l arg "$argv[$i]"
     switch "$arg"
-        case install uninstall status help --help -h
+        case install uninstall status
             set action "$arg"
         case --dry-run
             set dry_run "true"
-        case --force
-            set force "true"
-        case --target
+        case --no-cleanup
+            set no_cleanup "true"
+        case --conf-dir
             set -l next_i (math "$i + 1")
             if test $next_i -gt (count $argv)
-                echo "Error: --target requires a value" 1>&2
+                echo "Error: --conf-dir requires a value" 1>&2
                 echo "" 1>&2
                 __ift_help_to_stderr
                 exit 1
             end
-            set target "$argv[$next_i]"
+            set conf_dir "$argv[$next_i]"
             set i (math "$i + 1")
-        case --target=*
-            set target (string replace -- '--target=' '' "$arg")
+        case '--conf-dir=*'
+            set conf_dir (string replace -- '--conf-dir=' '' "$arg")
+        case help --help -h
+            __ift_help
+            exit 0
         case '*'
             echo "Error: Unknown argument: $arg" 1>&2
             echo "" 1>&2
@@ -441,46 +354,23 @@ while test $i -le (count $argv)
     set i (math "$i + 1")
 end
 
-if not string match -q -- '/*' "$target"
-    echo "Error: --target must be an absolute path (got: $target)" 1>&2
+if test -z "$action"
+    __ift_help
+    exit 0
+end
+
+if not string match -q -- '/*' "$conf_dir"
+    echo "Error: --conf-dir must be an absolute path (got: $conf_dir)" 1>&2
     echo "" 1>&2
     __ift_help_to_stderr
     exit 1
 end
 
 switch "$action"
-    case help --help -h
-        __ift_help
-        exit 0
-    case status
-        __ift_print_status "$target"
-        exit 0
     case install
-        if command -q stow
-            if not __ift_install_stow "$target" "$dry_run"
-                echo "Stow install failed; falling back to managed direct wrappers." 1>&2
-                __ift_install_direct "$target" "$dry_run" "$force"; or exit 1
-                if test "$dry_run" != "true"
-                    echo "Installed without stow (fallback mode)."
-                end
-            end
-        else
-            __ift_install_direct "$target" "$dry_run" "$force"; or exit 1
-            echo "Installed without stow (fallback mode)."
-            echo "If stow is installed later, wrappers auto-migrate on first run."
-        end
-        if test "$dry_run" != "true"
-            __ift_print_path_hint "$target"
-        end
+        __ift_install "$conf_dir" "$dry_run" "$no_cleanup"
     case uninstall
-        __ift_uninstall_stow "$target" "$dry_run"; or exit 1
-        __ift_remove_direct "$target" "$dry_run" "$force"; or exit 1
-        if test "$dry_run" != "true"; and test -f "$__ift_state_file"
-            rm -f "$__ift_state_file"
-        end
-    case '*'
-        echo "Error: Unknown command: $action" 1>&2
-        echo "" 1>&2
-        __ift_help_to_stderr
-        exit 1
+        __ift_uninstall "$conf_dir" "$dry_run"
+    case status
+        __ift_status "$conf_dir"
 end
