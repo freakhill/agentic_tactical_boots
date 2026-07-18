@@ -434,9 +434,9 @@ one even if a future envelope regressed to carrying it."
     (should shown)
     (should-not (seq-some (lambda (args) (equal (seq-take args 3) '("profile" "credentials" "set"))) calls))))
 
-(ert-deftest safeslop-test-credentials-discover-ignores-stale-installation-repository-callback ()
-  "A late result from an older R invocation cannot open selectors or mutate the reused buffer."
-  (let (callbacks completion-count)
+(ert-deftest safeslop-test-credentials-discover-malformed-success-is-never-rendered ()
+  "A strict-parser rejection cannot display forbidden fields from a malformed success."
+  (let (calls rendered)
     (with-temp-buffer
       (safeslop-credentials-mode)
       (setq safeslop-credentials--config-path "/ws/safeslop.cue"
@@ -451,7 +451,68 @@ one even if a future envelope regressed to carrying it."
                          ((string-prefix-p "Repository source" prompt) "Fetch from linked App")
                          (t (ert-fail (format "unexpected prompt %S" prompt))))))
                 ((symbol-function 'completing-read-multiple)
-                 (lambda (&rest _) (cl-incf completion-count) nil))
+                 (lambda (&rest _) (ert-fail "malformed response reached completion")))
+                ((symbol-function 'safeslop--show-envelope-buffer)
+                 (lambda (&rest _) (setq rendered t)))
+                ((symbol-function 'safeslop--call-json-async)
+                 (lambda (args callback &optional _stderr)
+                   (push args calls)
+                   (funcall callback
+                            (safeslop-contract-parse-string
+                             (cond
+                              ((equal (seq-take args 2) '("profile" "list")) safeslop-test-profile-list-json)
+                              ((equal (seq-take args 2) '("creds" "show")) safeslop-test-creds-show-empty-json)
+                              (t "{\"schema_version\":1,\"ok\":true,\"data\":{\"account\":\"github.com/acme\",\"contents_maximum\":\"read\",\"repositories\":[\"acme/web\"],\"token\":\"ghs_FORBIDDEN\"},\"warnings\":[],\"errors\":[]}")))))))
+        (safeslop-credentials-pick-repositories)))
+    (should-not rendered)
+    (should-not (seq-some (lambda (args) (equal (seq-take args 3) '("profile" "credentials" "set"))) calls))))
+
+(ert-deftest safeslop-test-credentials-discover-origin-mode-never-fetches ()
+  "A linked App does not make origin inference mint a discovery credential."
+  (let (calls)
+    (with-temp-buffer
+      (safeslop-credentials-mode)
+      (setq safeslop-credentials--config-path "/ws/safeslop.cue"
+            safeslop-credentials--account-links
+            '(((forge . "github") (host . "github.com") (owner . "acme") (probe . "ok"))))
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (prompt &rest _)
+                   (cond ((string-prefix-p "Profile" prompt) "app")
+                         ((string-prefix-p "Forge provider" prompt) "github")
+                         ((string-prefix-p "Repository mode" prompt) "origin inference")
+                         (t (ert-fail (format "unexpected prompt %S" prompt))))))
+                ((symbol-function 'yes-or-no-p) (lambda (&rest _) nil))
+                ((symbol-function 'safeslop--call-json-async)
+                 (lambda (args callback &optional _stderr)
+                   (push args calls)
+                   (funcall callback
+                            (safeslop-contract-parse-string
+                             (if (equal (seq-take args 2) '("profile" "list"))
+                                 safeslop-test-profile-list-json
+                               safeslop-test-creds-show-empty-json))))))
+        (safeslop-credentials-pick-repositories)))
+    (should-not (seq-some (lambda (args) (equal (seq-take args 2) '("creds" "repositories"))) calls))))
+
+(ert-deftest safeslop-test-credentials-discover-ignores-stale-installation-repository-callback ()
+  "A late result from an older R invocation cannot open selectors or mutate the reused buffer."
+  (let (callbacks (completion-count 0))
+    (with-temp-buffer
+      (safeslop-credentials-mode)
+      (setq safeslop-credentials--config-path "/ws/safeslop.cue"
+            safeslop-credentials--account-links
+            '(((forge . "github") (host . "github.com") (owner . "acme") (probe . "ok"))))
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (prompt &rest _)
+                   (cond ((string-prefix-p "Profile" prompt) "app")
+                         ((string-prefix-p "Forge provider" prompt) "github")
+                         ((string-prefix-p "Repository mode" prompt) "explicit repos")
+                         ((string-prefix-p "Linked GitHub App" prompt) "github.com/acme")
+                         ((string-prefix-p "Repository source" prompt) "Fetch from linked App")
+                         (t (ert-fail (format "unexpected prompt %S" prompt))))))
+                ((symbol-function 'completing-read-multiple)
+                 (lambda (prompt &rest _)
+                   (cl-incf completion-count)
+                   (and (string-prefix-p "Read-only" prompt) '("acme/api"))))
                 ((symbol-function 'read-string)
                  (lambda (&rest _) (ert-fail "stale test fell through to manual input")))
                 ((symbol-function 'yes-or-no-p) (lambda (&rest _) nil))

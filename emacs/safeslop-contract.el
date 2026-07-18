@@ -199,5 +199,69 @@ and staged paths are rejected rather than silently ignored."
         (signal 'safeslop-contract-error '("invalid creds status link"))))
     links))
 
+(defconst safeslop-contract-creds-repository-regexp
+  "\\`[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\\'"
+  "Exact value-free owner/repository selector grammar.")
+
+(defun safeslop-contract--exact-object-keys-p (object expected)
+  "Return non-nil when OBJECT has exactly the symbol keys in EXPECTED."
+  (and (safeslop-contract--alist-p object)
+       (= (length object) (length expected))
+       (cl-every (lambda (entry) (memq (car entry) expected)) object)
+       (cl-every (lambda (key) (assq key object)) expected)))
+
+(defun safeslop-contract--repository-less-p (left right)
+  "Return non-nil when repository LEFT sorts before RIGHT deterministically."
+  (let ((left-folded (downcase left))
+        (right-folded (downcase right)))
+    (if (equal left-folded right-folded)
+        (string-lessp left right)
+      (string-lessp left-folded right-folded))))
+
+(defun safeslop-contract-creds-repositories (envelope expected-account)
+  "Return strict repository-discovery data from ENVELOPE for EXPECTED-ACCOUNT.
+The accepted success shape contains only account, contents_maximum, and sorted
+value-free repository names.  Discovery errors, warnings, extra provider fields,
+wrong owners, malformed selectors, and case-folded duplicates are rejected."
+  (safeslop-contract-validate envelope)
+  (unless (and (safeslop-contract-ok-p envelope)
+               (null (safeslop-contract-warnings envelope)))
+    (signal 'safeslop-contract-error '("repository discovery envelope must be an unqualified success")))
+  (unless (and (stringp expected-account)
+               (string-match
+                "\\`github\\.com/\\([A-Za-z0-9._-]+\\)\\'"
+                expected-account))
+    (signal 'safeslop-contract-error '("invalid expected GitHub account")))
+  (let* ((data (safeslop-contract-data envelope))
+         (account (alist-get 'account data))
+         (maximum (alist-get 'contents_maximum data))
+         (repositories (alist-get 'repositories data))
+         (owner (match-string 1 expected-account))
+         (seen (make-hash-table :test #'equal)))
+    (unless (safeslop-contract--exact-object-keys-p
+             data '(account contents_maximum repositories))
+      (signal 'safeslop-contract-error '("invalid repository discovery data keys")))
+    (unless (equal account expected-account)
+      (signal 'safeslop-contract-error '("repository discovery account mismatch")))
+    (unless (member maximum '("none" "read" "write"))
+      (signal 'safeslop-contract-error '("invalid repository Contents maximum")))
+    (unless (listp repositories)
+      (signal 'safeslop-contract-error '("repositories must be an array")))
+    (dolist (repository repositories)
+      (unless (and (stringp repository)
+                   (string-match-p safeslop-contract-creds-repository-regexp repository)
+                   (string-equal-ignore-case
+                    (car (split-string repository "/")) owner))
+        (signal 'safeslop-contract-error '("invalid installation repository selector")))
+      (let ((folded (downcase repository)))
+        (when (gethash folded seen)
+          (signal 'safeslop-contract-error '("duplicate installation repository selector")))
+        (puthash folded t seen)))
+    (unless (equal repositories
+                   (sort (copy-sequence repositories)
+                         #'safeslop-contract--repository-less-p))
+      (signal 'safeslop-contract-error '("installation repositories must be sorted")))
+    data))
+
 (provide 'safeslop-contract)
 ;;; safeslop-contract.el ends here

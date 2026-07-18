@@ -23,8 +23,10 @@
 ;; *refs*, which are not values.  Account-link rows expose non-secret ids/probe
 ;; classes only.  Profile repo-scope writes go through the CLI-owned
 ;; `profile credentials set|clear' contract rather than ad-hoc Emacs CUE edits;
-;; `e' still opens safeslop.cue for manual ref editing.  There is no in-UI mint
-;; or standalone revoke — ephemeral deploy keys live and die with `run'/`session'.
+;; `e' still opens safeslop.cue for manual ref editing.  Runtime credentials
+;; still live and die only with `run'/`session'; the explicit repository picker
+;; uses a separate host-only metadata token that is cleaned up before candidates
+;; are returned and never enters profile/session authority.
 ;;
 ;; Ergonomics mirror the Profiles surface:
 ;;   - RET / i  inspect: a read-only per-profile detail view (`creds show').
@@ -68,6 +70,9 @@ without re-probing; nil before the first fetch returns.")
 (defvar-local safeslop-credentials--repo-draft nil
   "Value-free failed repository-scope draft reused as defaults by the next
 R action.")
+
+(defvar-local safeslop-credentials--repository-discovery-token nil
+  "Opaque token rejecting late repository-discovery callbacks after R reuse.")
 
 (defvar-local safeslop-credentials--account-link-draft nil
   "Failed value-free account-link ids/refs reused as defaults by the next A action.")
@@ -843,6 +848,169 @@ source and name."
     (list (format "https://%s" (alist-get 'host link))
           (let ((port (alist-get 'sshPort link))) (and port (number-to-string port))))))
 
+(defun safeslop-credentials--github-account-keys ()
+  "Return sorted linked public-GitHub App account keys for discovery."
+  (sort
+   (delete-dups
+    (delq nil
+          (mapcar
+           (lambda (row)
+             (when (and (equal (alist-get 'forge row) "github")
+                        (equal (alist-get 'host row) "github.com")
+                        (safeslop-contract--nonempty-string-p (alist-get 'owner row)))
+               (format "github.com/%s" (alist-get 'owner row))))
+           safeslop-credentials--account-links)))
+   #'string<))
+
+(defun safeslop-credentials--normalize-repository-lists (read-repos write-repos)
+  "Validate and return normalized (READ-REPOS WRITE-REPOS)."
+  (setq read-repos (delete-dups
+                    (seq-filter #'safeslop-contract--nonempty-string-p
+                                (copy-sequence read-repos)))
+        write-repos (delete-dups
+                     (seq-filter #'safeslop-contract--nonempty-string-p
+                                 (copy-sequence write-repos))))
+  (dolist (repository (append read-repos write-repos))
+    (unless (string-match-p safeslop-contract-creds-repository-regexp repository)
+      (user-error "Repository %s must be owner/repo" repository)))
+  (let ((writes (mapcar #'downcase write-repos)))
+    (when (seq-some (lambda (repository) (member (downcase repository) writes)) read-repos)
+      (user-error "A repository cannot be both read-only and write")))
+  (when (and (null read-repos) (null write-repos))
+    (user-error "At least one read or write repo is required for explicit mode"))
+  (list read-repos write-repos))
+
+(defun safeslop-credentials--prompt-manual-repositories (read-repos write-repos)
+  "Prompt for manual READ-REPOS and WRITE-REPOS and return normalized lists."
+  (safeslop-credentials--normalize-repository-lists
+   (safeslop-credentials--split-repo-list
+    (read-string "Read-only repos (owner/name, comma-separated): " nil nil
+                 (string-join read-repos ", ")))
+   (safeslop-credentials--split-repo-list
+    (read-string "Write repos (owner/name, comma-separated): " nil nil
+                 (string-join write-repos ", ")))))
+
+(defun safeslop-credentials--repository-candidates (repositories read-repos write-repos)
+  "Return sorted discovery REPOSITORIES plus existing READ/WRITE-REPOS."
+  (sort (delete-dups (append (copy-sequence repositories)
+                             (copy-sequence read-repos)
+                             (copy-sequence write-repos)))
+        #'safeslop-contract--repository-less-p))
+
+(defun safeslop-credentials--completion-initial (repositories)
+  "Return comma-terminated initial input for REPOSITORIES, or nil."
+  (when repositories
+    (concat (string-join repositories ",") ",")))
+
+(defun safeslop-credentials--prompt-discovered-repositories
+    (repositories maximum read-repos write-repos)
+  "Search REPOSITORIES and return normalized read/write lists.
+MAXIMUM is the linked installation's current Contents capability hint."
+  (let* ((candidates (safeslop-credentials--repository-candidates
+                      repositories read-repos write-repos))
+         (selected-read
+          (completing-read-multiple
+           (format "Read-only installation repositories (Contents %s): " maximum)
+           candidates nil nil (safeslop-credentials--completion-initial read-repos)))
+         (selected-write
+          (completing-read-multiple
+           (format "Write installation repositories (Contents %s): " maximum)
+           candidates nil nil (safeslop-credentials--completion-initial write-repos)))
+         (normalized (safeslop-credentials--normalize-repository-lists
+                      selected-read selected-write)))
+    (when (and (or (and (equal maximum "none")
+                         (or (car normalized) (cadr normalized)))
+                    (and (cadr normalized) (not (equal maximum "write"))))
+               (not (yes-or-no-p
+                     (format "Linked App currently reports Contents %s; requested %s access may fail at launch. Continue with these repositories? "
+                             maximum (if (cadr normalized) "write" "read")))))
+      (message "safeslop: repository selection cancelled")
+      (setq normalized nil))
+    normalized))
+
+(defun safeslop-credentials--repository-draft
+    (profile provider use-origin read-repos write-repos url ssh-port &optional account source-kind)
+  "Return one value-free repository-scope draft."
+  `((profile . ,profile) (provider . ,provider) (use-origin . ,use-origin)
+    (read-repos . ,read-repos) (write-repos . ,write-repos)
+    (url . ,url) (ssh-port . ,ssh-port) (account . ,account)
+    (source-kind . ,source-kind)))
+
+(defun safeslop-credentials--save-repository-scope
+    (source profile existing provider use-origin read-repos write-repos url ssh-port
+            &optional account source-kind)
+  "Confirm and asynchronously replace PROFILE's complete forge scope."
+  (let* ((draft (safeslop-credentials--repository-draft
+                 profile provider use-origin read-repos write-repos url ssh-port
+                 account source-kind))
+         (summary (concat
+                   (safeslop-credentials--profile-credentials-summary
+                    profile existing provider use-origin read-repos write-repos url ssh-port)
+                   (when account
+                     (format "Discovery source: %s — snapshot only; launch remains authoritative\n"
+                             account))))
+         (args (safeslop-credentials--profile-credentials-args
+                profile safeslop-credentials--config-path provider use-origin
+                read-repos write-repos url ssh-port)))
+    (if (not (yes-or-no-p (concat "Save profile credential scopes?\n" summary)))
+        (message "safeslop: profile credential update cancelled")
+      (setq safeslop-credentials--repo-draft draft)
+      (safeslop--call-json-async
+       args
+       (lambda (env)
+         (if (safeslop-contract-ok-p env)
+             (progn
+               (when (buffer-live-p source)
+                 (with-current-buffer source (setq safeslop-credentials--repo-draft nil)))
+               (message "safeslop: profile credentials updated for %s — review and re-trust before launch" profile)
+               (safeslop-credentials--refresh-after-profile-credential-save source))
+           (message "safeslop: update failed; value-free draft retained — return with K, retry with R")
+           (safeslop--show-envelope-buffer "*safeslop profile credentials*" args env)))))))
+
+(defun safeslop-credentials--request-repository-discovery
+    (source profile existing read-repos write-repos account)
+  "Fetch ACCOUNT's linked-App repositories, then continue PROFILE assignment."
+  (let* ((token (list profile account))
+         (args (list "creds" "repositories" account "--output" "json"))
+         (draft (safeslop-credentials--repository-draft
+                 profile "github" nil read-repos write-repos nil nil
+                 account "linked-app")))
+    (setq safeslop-credentials--repository-discovery-token token
+          safeslop-credentials--repo-draft draft)
+    (message "safeslop: fetching repositories visible to %s…" account)
+    (safeslop--call-json-async
+     args
+     (lambda (envelope)
+       (when (buffer-live-p source)
+         (with-current-buffer source
+           (when (and (derived-mode-p 'safeslop-credentials-mode)
+                      (eq token safeslop-credentials--repository-discovery-token))
+             (if (not (safeslop-contract-ok-p envelope))
+                 (progn
+                   (message "safeslop: repository discovery failed; draft retained — retry R or enter manually")
+                   (safeslop--show-envelope-buffer
+                    "*safeslop GitHub repositories*" args envelope))
+               (condition-case nil
+                   (let* ((data (safeslop-contract-creds-repositories envelope account))
+                          (selection
+                           (safeslop-credentials--prompt-discovered-repositories
+                            (alist-get 'repositories data)
+                            (alist-get 'contents_maximum data)
+                            read-repos write-repos)))
+                     (when selection
+                       (setq safeslop-credentials--repo-draft
+                             (safeslop-credentials--repository-draft
+                              profile "github" nil (car selection) (cadr selection)
+                              nil nil account "linked-app"))
+                       (safeslop-credentials--save-repository-scope
+                        source profile existing "github" nil
+                        (car selection) (cadr selection) nil nil
+                        account "linked-app")))
+                 (safeslop-contract-error
+                  ;; Never render a malformed success envelope: strict rejection may
+                  ;; have found a forbidden provider/value field.
+                  (message "safeslop: invalid repository discovery response; draft retained")))))))))))
+
 (defun safeslop-credentials--prompt-repository-scope (source profile data)
   "Prompt for PROFILE scope using current `creds show' DATA, then mutate
 asynchronously."
@@ -862,47 +1030,44 @@ asynchronously."
          (read-repos (and (not use-origin) (alist-get 'read-repos initial)))
          (write-repos (and (not use-origin) (alist-get 'write-repos initial)))
          (forgejo-defaults (safeslop-credentials--linked-forgejo-defaults))
-         url ssh-port)
-    (unless use-origin
-      (setq read-repos
-            (safeslop-credentials--split-repo-list
-             (read-string "Read-only repos (owner/name, comma-separated): " nil nil
-                          (string-join read-repos ", ")))
-            write-repos
-            (safeslop-credentials--split-repo-list
-             (read-string "Write repos (owner/name, comma-separated): " nil nil
-                          (string-join write-repos ", "))))
-      (when (and (null read-repos) (null write-repos))
-        (user-error "At least one read or write repo is required for explicit mode"))
-      (when (cl-intersection read-repos write-repos :test #'equal)
-        (user-error "A repository cannot be both read-only and write")))
+         (github-accounts (and (equal provider "github")
+                               (not use-origin)
+                               (safeslop-credentials--github-account-keys)))
+         url ssh-port account source-kind selection)
+    (cond
+     (use-origin)
+     (github-accounts
+      (setq account
+            (completing-read
+             "Linked GitHub App account: " github-accounts nil t nil nil
+             (let ((prior (alist-get 'account initial)))
+               (if (member prior github-accounts) prior (car github-accounts))))
+            source-kind
+            (completing-read
+             "Repository source: " '("Fetch from linked App" "Enter manually")
+             nil t nil nil "Fetch from linked App"))
+      (if (equal source-kind "Fetch from linked App")
+          (safeslop-credentials--request-repository-discovery
+           source profile existing read-repos write-repos account)
+        (setq selection (safeslop-credentials--prompt-manual-repositories
+                         read-repos write-repos)
+              read-repos (car selection)
+              write-repos (cadr selection))))
+     (t
+      (setq selection (safeslop-credentials--prompt-manual-repositories
+                       read-repos write-repos)
+            read-repos (car selection)
+            write-repos (cadr selection))))
     (when (and (equal provider "forgejo") (not use-origin))
       (setq url (safeslop-credentials--nonempty-read-string
                  "Forgejo URL: " (car forgejo-defaults))
             ssh-port (read-string "Forgejo SSH port (blank for default): " nil nil
                                   (cadr forgejo-defaults))))
-    (let* ((draft `((profile . ,profile) (provider . ,provider) (use-origin . ,use-origin)
-                    (read-repos . ,read-repos) (write-repos . ,write-repos)
-                    (url . ,url) (ssh-port . ,ssh-port)))
-           (summary (safeslop-credentials--profile-credentials-summary
-                     profile existing provider use-origin read-repos write-repos url ssh-port))
-           (args (safeslop-credentials--profile-credentials-args
-                  profile safeslop-credentials--config-path provider use-origin
-                  read-repos write-repos url ssh-port)))
-      (if (not (yes-or-no-p (concat "Save profile credential scopes?\n" summary)))
-          (message "safeslop: profile credential update cancelled")
-        (setq safeslop-credentials--repo-draft draft)
-        (safeslop--call-json-async
-         args
-         (lambda (env)
-           (if (safeslop-contract-ok-p env)
-               (progn
-                 (when (buffer-live-p source)
-                   (with-current-buffer source (setq safeslop-credentials--repo-draft nil)))
-                 (message "safeslop: profile credentials updated for %s — review and re-trust before launch" profile)
-                 (safeslop-credentials--refresh-after-profile-credential-save source))
-             (message "safeslop: update failed; value-free draft retained — return with K, retry with R")
-             (safeslop--show-envelope-buffer "*safeslop profile credentials*" args env))))))))
+    (unless (and github-accounts
+                 (equal source-kind "Fetch from linked App"))
+      (safeslop-credentials--save-repository-scope
+       source profile existing provider use-origin read-repos write-repos url ssh-port
+       nil (and github-accounts source-kind)))))
 
 (defun safeslop-credentials--load-profile-scope (source profile)
   "Fetch value-free current scope rows for PROFILE, then open the
@@ -924,6 +1089,7 @@ repository prompt."
 (defun safeslop-credentials-pick-repositories ()
   "Configure complete GitHub/Forgejo repo scopes for a project profile."
   (interactive)
+  (setq safeslop-credentials--repository-discovery-token nil)
   (safeslop-credentials--with-project-profile #'safeslop-credentials--load-profile-scope))
 
 (defun safeslop-credentials-clear-profile-forge ()
