@@ -1,0 +1,14 @@
+strict digraph DiskGraph {
+nodesep=0.35;
+subgraph cluster_graph {
+color="white";
+-2485336354511760763 [label="s = [ status |-> \"Created\",\n  owners |-> {},\n  detached |-> FALSE,\n  durableAuthority |-> {},\n  durableRevision |-> 0,\n  recordedGen |-> [authority |-> {}, revision |-> 0],\n  runtimeAuthority |-> {},\n  runtimeGen |-> [authority |-> {}, revision |-> 0],\n  inspectedGen |-> [authority |-> {}, revision |-> 0],\n  health |-> \"Healthy\",\n  mode |-> \"Normal\",\n  operation |-> \"Idle\",\n  effect |-> \"None\",\n  evidence |-> \"None\",\n  result |-> \"Pending\",\n  pendingAuthority |-> {},\n  pendingRevision |-> 0,\n  direction |-> \"NoDirection\",\n  worlds |-> {},\n  teardownProven |-> FALSE,\n  txOwner |-> \"NoOwner\",\n  lastOwnerAction |-> \"None\" ]",style = filled]
+-2485336354511760763 -> -4960434399711919478 [label="ClaimStart",color="black",fontcolor="black"];
+-4960434399711919478 [label="s = [ status |-> \"Created\",\n  owners |-> {},\n  detached |-> FALSE,\n  durableAuthority |-> {},\n  durableRevision |-> 0,\n  recordedGen |-> [authority |-> {}, revision |-> 0],\n  runtimeAuthority |-> {},\n  runtimeGen |-> [authority |-> {}, revision |-> 0],\n  inspectedGen |-> [authority |-> {}, revision |-> 0],\n  health |-> \"Healthy\",\n  mode |-> \"Normal\",\n  operation |-> \"Claim\",\n  effect |-> \"Commit\",\n  evidence |-> \"None\",\n  result |-> \"Pending\",\n  pendingAuthority |-> {},\n  pendingRevision |-> 0,\n  direction |-> \"NoDirection\",\n  worlds |-> {},\n  teardownProven |-> FALSE,\n  txOwner |-> \"OwnerA\",\n  lastOwnerAction |-> \"None\" ]"];
+-4960434399711919478 -> 7173379135665419145 [label="ClaimCommitNew",color="black",fontcolor="black"];
+7173379135665419145 [label="s = [ status |-> \"Running\",\n  owners |-> {\"OwnerA\"},\n  detached |-> FALSE,\n  durableAuthority |-> {},\n  durableRevision |-> 0,\n  recordedGen |-> [authority |-> {}, revision |-> 0],\n  runtimeAuthority |-> {},\n  runtimeGen |-> [authority |-> {}, revision |-> 0],\n  inspectedGen |-> [authority |-> {}, revision |-> 0],\n  health |-> \"Healthy\",\n  mode |-> \"Normal\",\n  operation |-> \"Idle\",\n  effect |-> \"None\",\n  evidence |-> \"CommitNew\",\n  result |-> \"Success\",\n  pendingAuthority |-> {},\n  pendingRevision |-> 0,\n  direction |-> \"NoDirection\",\n  worlds |-> {},\n  teardownProven |-> FALSE,\n  txOwner |-> \"NoOwner\",\n  lastOwnerAction |-> \"None\" ]"];
+{rank = same; -2485336354511760763;}
+{rank = same; -4960434399711919478;}
+{rank = same; 7173379135665419145;}
+}
+}

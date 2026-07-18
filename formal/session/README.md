@@ -24,6 +24,12 @@ Widening commits the durable upper bound before runtime apply. Narrowing first c
 
 The positive cfg exhaustively checks the named invariants on raw truth states and checks `TerminalAwareDeadlock`; terminal states have an explicit stuttering step. There is no fairness constraint, hidden state constraint, simulation mode, or `Claimed` lifecycle.
 
+## Pinned TLC graph grammar and normalization
+
+The conformance parser accepts only the verified TLC v1.7.4 `dot,actionlabels` shape. The graph envelope is exactly `strict digraph DiskGraph`, `nodesep=0.35`, and one white `cluster_graph`, with no trailing LF. Signed-decimal node IDs carry a `label`; only mechanically marked initial nodes also carry `style = filled` and use TLC's observed no-semicolon form. Edges accept exactly `label`, `color="black"`, and `fontcolor="black"`. Rank rows accept only `rank = same`. Node labels accept only the observed `\\n` and `\\"` escapes and the finite TLA value grammar used here: records, sets, strings, integers, and booleans. Unknown attributes, syntax, escapes, fields, actions, duplicate definitions, missing references, incomplete rank metadata, and absent initial markers fail closed.
+
+Every raw state must contain all 22 model fields. The normalized key retains lifecycle, owners/detached mode, durable/runtime/pending authority and revisions, recorded/runtime/inspected generations, health, mode, operation, effect, result, and direction. It deliberately drops the five checker-only fields `evidence`, `worlds`, `teardownProven`, `txOwner`, and `lastOwnerAction` only after validating their finite domains. DOT node IDs, rank/layout metadata, colors, fonts, and the consumed initial style are also omitted. Records become lexicographically keyed JSON, owner/grant sets become sorted arrays, and `[authority |-> {}, revision |-> -1]` becomes the single `NoGen` sentinel. Initial keys, normalized state keys, and labelled directed edges are then compared in both directions with shortest graph witnesses.
+
 ## Expected-failure controls
 
 Each mutant adds exactly one unsafe action to the positive relation. The harness requires TLC to name both the expected invariant and the violating action anchor.

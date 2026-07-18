@@ -127,11 +127,13 @@ Baseline (2026-07-18, `ab08404`, clean main): focused session/container/CLI test
 
   TASK 4 EVIDENCE: The pure reducer reaches all 28 positive TLA+ action labels through `EnabledProtocol` without a duplicate guard table. Twenty-one focused protocol tests cover old/new/unknown commits, exact owners, direction-aware egress, recovery/teardown, normalization, finite rebasing, concrete generation equality, commit-effect candidates, malformed/stale concrete shapes, and binding injectivity. Unknown or tokenless states remain non-normal and cannot be projected as ordinary commit candidates. The focused and race verification commands exited 0; production call paths remain unchanged.
 
-- [ ] Add strict TLC graph parsing and comparator negative controls
+- [x] Add strict TLC graph parsing and comparator negative controls
   FILE:     new `internal/engine/session/tla_graph_test.go`, new minimal `internal/engine/session/testdata/tlc-v1.7.4-actionlabels.dot`, `formal/session/README.md`
   CHANGE:   TDD a parser for only the verified v1.7.4 DOT/action-label and finite value grammar. Enumerate every accepted attribute and every dropped checker-only field; reject unknown syntax/attributes, malformed escapes, duplicate/missing nodes, unknown actions, and absent initial markers. Canonicalize records/sets/sentinels to sorted JSON. Compare initial keys, states, and labelled edges in both directions; tests must add/drop/rename an edge and alter an initial state and assert directional shortest-witness diagnostics. Do not embed a third transition relation.
   VERIFY:   `go test ./internal/engine/session -run 'TLCGraph|TLCParser|GraphComparator|InitialState' -count=1 -v && git diff --check`
   EXPECTED: The pinned fixture parses deterministically; every parser/comparator mutant fails for its intended reason; initial nodes are mechanically recognized rather than assumed.
+
+  TASK 5 EVIDENCE: The committed three-node/two-edge v1.7.4 fixture parses deterministically, and the same parser read the retained 476-node/1,028-edge positive TLC artifact. Eleven syntax/value/shape mutants fail for their intended reason, including unknown attributes/actions, malformed escapes, duplicate or missing nodes, invalid dropped fields, incomplete ranks, and an absent mechanically marked initial. Add/drop/rename-edge and altered-initial controls report the expected `TLA - Go` or `Go - TLA` direction with a shortest graph witness. The exact focused verification exited 0.
 
 - [ ] Prove bounded TLA+/Go graph equivalence and mutation ownership
   FILE:     new `internal/engine/session/tla_conformance_test.go`, `internal/engine/session/protocol_mutation_test.go`, `internal/engine/session/testdata/protocol-mutation-allowlist.txt`, `scripts/check-tla-session.sh`, `Makefile`
