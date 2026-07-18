@@ -143,7 +143,7 @@ func runRepositoryDiscovery(ctx context.Context, account string, runtime reposit
 			if cleanupToken(token.Token) != nil {
 				return repositoryDiscoveryCleanupUncertain(account)
 			}
-			return repositoryDiscoveryError(jsoncontract.CodeIOError, "GitHub repository discovery credential response was invalid", account)
+			return repositoryDiscoveryError(jsoncontract.CodeSchemaViolation, "GitHub repository discovery credential response is invalid", account)
 		}
 		if errors.Is(err, githubapp.ErrTokenMintUncertain) {
 			return repositoryDiscoveryCleanupUncertain(account)

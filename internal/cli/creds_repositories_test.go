@@ -215,7 +215,7 @@ func TestRepositoryDiscoveryInvalidMintResponseRevokesReturnedToken(t *testing.T
 		returnTokenOnMintError: true,
 	}
 	env := runRepositoryDiscovery(context.Background(), "github.com/acme", repositoryRuntimeForTest(t, client))
-	if env.OK || len(env.Errors) != 1 || env.Errors[0].Code != jsoncontract.CodeIOError {
+	if env.OK || len(env.Errors) != 1 || env.Errors[0].Code != jsoncontract.CodeSchemaViolation {
 		t.Fatalf("envelope = %+v", env)
 	}
 	if client.revokes != 1 || !client.revokeContextOK {
