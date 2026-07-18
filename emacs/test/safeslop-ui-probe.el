@@ -92,6 +92,7 @@
   (should (featurep 'safeslop))
   (should (featurep 'safeslop-doom))
   (dolist (fn '(safeslop-portal safeslop-profiles safeslop-credentials
+                safeslop-contract-creds-repositories
                 safeslop-profiles-compose-toggle safeslop-doom-bind-leader))
     (should (fboundp fn))))
 

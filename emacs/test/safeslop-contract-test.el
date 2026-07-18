@@ -177,6 +177,29 @@ parsed envelope to its callback (the non-blocking substitute for `call-json')."
     (should-error (safeslop-contract-creds-status-links envelope)
                   :type 'safeslop-contract-error)))
 
+(ert-deftest safeslop-test-credentials-installation-repositories-contract-validates-minimum-data ()
+  (let* ((envelope
+          (safeslop-contract-parse-string
+           "{\"schema_version\":1,\"ok\":true,\"data\":{\"account\":\"github.com/acme\",\"contents_maximum\":\"write\",\"repositories\":[\"acme/api\",\"acme/web\"]},\"warnings\":[],\"errors\":[]}"))
+         (data (safeslop-contract-creds-repositories envelope "github.com/acme")))
+    (should (equal (alist-get 'account data) "github.com/acme"))
+    (should (equal (alist-get 'contents_maximum data) "write"))
+    (should (equal (alist-get 'repositories data) '("acme/api" "acme/web")))))
+
+(ert-deftest safeslop-test-credentials-installation-repositories-contract-rejects-untrusted-data ()
+  (dolist
+      (json
+       '("{\"schema_version\":1,\"ok\":false,\"data\":{},\"warnings\":[],\"errors\":[{\"code\":\"IO_ERROR\",\"message\":\"failed\",\"details\":{},\"retryable\":false}]}"
+         "{\"schema_version\":1,\"ok\":true,\"data\":{\"account\":\"github.com/other\",\"contents_maximum\":\"write\",\"repositories\":[\"other/web\"]},\"warnings\":[],\"errors\":[]}"
+         "{\"schema_version\":1,\"ok\":true,\"data\":{\"account\":\"github.com/acme\",\"contents_maximum\":\"admin\",\"repositories\":[\"acme/web\"]},\"warnings\":[],\"errors\":[]}"
+         "{\"schema_version\":1,\"ok\":true,\"data\":{\"account\":\"github.com/acme\",\"contents_maximum\":\"read\",\"repositories\":[\"acme/Repo\",\"ACME/repo\"]},\"warnings\":[],\"errors\":[]}"
+         "{\"schema_version\":1,\"ok\":true,\"data\":{\"account\":\"github.com/acme\",\"contents_maximum\":\"read\",\"repositories\":[\"other/web\"]},\"warnings\":[],\"errors\":[]}"
+         "{\"schema_version\":1,\"ok\":true,\"data\":{\"account\":\"github.com/acme\",\"contents_maximum\":\"read\",\"repositories\":[\"acme/web\"],\"token\":\"ghs_FORBIDDEN\"},\"warnings\":[],\"errors\":[]}"))
+    (should-error
+     (safeslop-contract-creds-repositories
+      (safeslop-contract-parse-string json) "github.com/acme")
+     :type 'safeslop-contract-error)))
+
 (ert-deftest safeslop-test-call-json-async-degrades-on-non-json ()
   "Async path degrades like the sync one: non-JSON stdout yields a CLIENT_NON_JSON
 envelope via the callback, never a crash."

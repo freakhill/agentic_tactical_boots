@@ -20,6 +20,22 @@
   "{\"schema_version\":1,\"ok\":true,\"data\":{\"config\":\"/ws/safeslop.cue\",\"profile\":\"app\",\"op\":{\"available\":false,\"signedIn\":false},\"credentials\":[{\"profile\":\"app\",\"kind\":\"github\",\"name\":\"acme/web\",\"scope\":\"app ro\",\"ref\":\"\",\"status\":\"ephemeral\"},{\"profile\":\"app\",\"kind\":\"github\",\"name\":\"acme/api\",\"scope\":\"app rw\",\"ref\":\"\",\"status\":\"ephemeral\"}]},\"warnings\":[],\"errors\":[]}"
   "Mixed read/write GitHub posture used to prove safe edit defaults.")
 
+(defconst safeslop-test-creds-show-offsnapshot-json
+  "{\"schema_version\":1,\"ok\":true,\"data\":{\"config\":\"/ws/safeslop.cue\",\"profile\":\"app\",\"op\":{\"available\":false,\"signedIn\":false},\"credentials\":[{\"profile\":\"app\",\"kind\":\"github\",\"name\":\"acme/legacy\",\"scope\":\"app ro\",\"ref\":\"\",\"status\":\"ephemeral\"},{\"profile\":\"app\",\"kind\":\"github\",\"name\":\"acme/old-write\",\"scope\":\"app rw\",\"ref\":\"\",\"status\":\"ephemeral\"}]},\"warnings\":[],\"errors\":[]}"
+  "Existing scopes absent from a later discovery snapshot.")
+
+(defconst safeslop-test-github-repositories-json
+  "{\"schema_version\":1,\"ok\":true,\"data\":{\"account\":\"github.com/acme\",\"contents_maximum\":\"write\",\"repositories\":[\"acme/api\",\"acme/new\",\"acme/web\"]},\"warnings\":[],\"errors\":[]}"
+  "A complete value-free linked-App repository discovery response.")
+
+(defconst safeslop-test-github-repositories-read-json
+  "{\"schema_version\":1,\"ok\":true,\"data\":{\"account\":\"github.com/acme\",\"contents_maximum\":\"read\",\"repositories\":[\"acme/api\",\"acme/web\"]},\"warnings\":[],\"errors\":[]}"
+  "A discovery response whose installation currently has read-only Contents.")
+
+(defconst safeslop-test-github-repositories-error-json
+  "{\"schema_version\":1,\"ok\":false,\"data\":{},\"warnings\":[],\"errors\":[{\"code\":\"CREDENTIAL_REVOKE_FAILED\",\"message\":\"cleanup uncertain\",\"details\":{\"account\":\"github.com/acme\"},\"retryable\":false}]}"
+  "A value-free discovery cleanup failure.")
+
 (defconst safeslop-test-mutation-ok-json
   "{\"schema_version\":1,\"ok\":true,\"data\":{\"credential_scopes\":[]},\"warnings\":[],\"errors\":[]}"
   "A value-free successful profile mutation response.")
@@ -293,6 +309,204 @@ one even if a future envelope regressed to carrying it."
     (should (member '("profile" "list" "/ws/safeslop.cue" "--output" "json") calls))
     (should (member '("creds" "show" "app" "/ws/safeslop.cue" "--output" "json") calls))
     (should-not (seq-some (lambda (args) (equal (seq-take args 3) '("profile" "credentials" "set"))) calls))))
+
+(ert-deftest safeslop-test-credentials-discover-installation-repositories-searches-and-saves ()
+  "GitHub explicit mode fetches one visible App account and uses searchable suggestions."
+  (let (calls completions confirmation)
+    (with-temp-buffer
+      (safeslop-credentials-mode)
+      (setq safeslop-credentials--config-path "/ws/safeslop.cue"
+            safeslop-credentials--account-links
+            '(((forge . "github") (host . "github.com") (owner . "acme")
+               (appID . 123) (installationID . 456) (probe . "ok") (ttl . "1h-renewable"))))
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (prompt &rest _)
+                   (cond ((string-prefix-p "Profile" prompt) "app")
+                         ((string-prefix-p "Forge provider" prompt) "github")
+                         ((string-prefix-p "Repository mode" prompt) "explicit repos")
+                         ((string-prefix-p "Linked GitHub App" prompt) "github.com/acme")
+                         ((string-prefix-p "Repository source" prompt) "Fetch from linked App")
+                         (t (ert-fail (format "unexpected completion prompt %S" prompt))))))
+                ((symbol-function 'completing-read-multiple)
+                 (lambda (prompt collection &optional _predicate require-match initial-input &rest _)
+                   (push (list prompt collection require-match initial-input) completions)
+                   (if (string-prefix-p "Read-only" prompt)
+                       '("acme/legacy" "acme/new")
+                     '("acme/old-write"))))
+                ((symbol-function 'read-string)
+                 (lambda (&rest _) (ert-fail "discovery path fell back to name memorization")))
+                ((symbol-function 'yes-or-no-p)
+                 (lambda (prompt) (setq confirmation prompt) t))
+                ((symbol-function 'safeslop--call-json-async)
+                 (lambda (args callback &optional _stderr)
+                   (push args calls)
+                   (funcall callback
+                            (safeslop-contract-parse-string
+                             (cond
+                              ((equal (seq-take args 2) '("profile" "list")) safeslop-test-profile-list-json)
+                              ((equal (seq-take args 2) '("creds" "show")) safeslop-test-creds-show-offsnapshot-json)
+                              ((equal (seq-take args 2) '("creds" "repositories")) safeslop-test-github-repositories-json)
+                              (t safeslop-test-mutation-ok-json))))))
+                ((symbol-function 'safeslop-credentials-refresh) (lambda () nil))
+                ((symbol-function 'safeslop-profiles-refresh) (lambda () nil)))
+        (safeslop-credentials-pick-repositories)))
+    (should (member '("creds" "repositories" "github.com/acme" "--output" "json") calls))
+    (should (member '("profile" "credentials" "set" "app" "/ws/safeslop.cue"
+                      "--provider" "github" "--repo" "acme/legacy" "--repo" "acme/new"
+                      "--write-repo" "acme/old-write" "--output" "json") calls))
+    (should (= (length completions) 2))
+    (dolist (entry completions)
+      (should-not (nth 2 entry))
+      (should (member "acme/legacy" (nth 1 entry)))
+      (should (member "acme/old-write" (nth 1 entry))))
+    (should (seq-some (lambda (entry) (string-match-p "legacy" (or (nth 3 entry) ""))) completions))
+    (should (string-match-p "WRITE: acme/old-write" (substring-no-properties confirmation)))))
+
+(ert-deftest safeslop-test-credentials-discover-manual-fallback-does-not-mint ()
+  "The visible manual branch remains available and never invokes discovery."
+  (let (calls prompts)
+    (with-temp-buffer
+      (safeslop-credentials-mode)
+      (setq safeslop-credentials--config-path "/ws/safeslop.cue"
+            safeslop-credentials--account-links
+            '(((forge . "github") (host . "github.com") (owner . "acme") (probe . "ok"))))
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (prompt &rest _)
+                   (push prompt prompts)
+                   (cond ((string-prefix-p "Profile" prompt) "app")
+                         ((string-prefix-p "Forge provider" prompt) "github")
+                         ((string-prefix-p "Repository mode" prompt) "explicit repos")
+                         ((string-prefix-p "Linked GitHub App" prompt) "github.com/acme")
+                         ((string-prefix-p "Repository source" prompt) "Enter manually")
+                         (t (ert-fail (format "unexpected prompt %S" prompt))))))
+                ((symbol-function 'read-string)
+                 (let ((answers '("acme/web" "acme/api")))
+                   (lambda (&rest _) (pop answers))))
+                ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+                ((symbol-function 'safeslop--call-json-async)
+                 (lambda (args callback &optional _stderr)
+                   (push args calls)
+                   (funcall callback
+                            (safeslop-contract-parse-string
+                             (cond ((equal (seq-take args 2) '("profile" "list")) safeslop-test-profile-list-json)
+                                   ((equal (seq-take args 2) '("creds" "show")) safeslop-test-creds-show-empty-json)
+                                   (t safeslop-test-mutation-ok-json))))))
+                ((symbol-function 'safeslop-credentials-refresh) (lambda () nil)))
+        (safeslop-credentials-pick-repositories)))
+    (should (seq-some (lambda (p) (string-prefix-p "Linked GitHub App" p)) prompts))
+    (should (seq-some (lambda (p) (string-prefix-p "Repository source" p)) prompts))
+    (should-not (seq-some (lambda (args) (equal (seq-take args 2) '("creds" "repositories"))) calls))))
+
+(ert-deftest safeslop-test-credentials-discover-failure-preserves-draft-and-authority ()
+  "Discovery failure imports nothing, preserves the value-free draft, and never saves."
+  (let (calls shown)
+    (with-temp-buffer
+      (safeslop-credentials-mode)
+      (setq safeslop-credentials--config-path "/ws/safeslop.cue"
+            safeslop-credentials--account-links
+            '(((forge . "github") (host . "github.com") (owner . "acme") (probe . "ok"))))
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (prompt &rest _)
+                   (cond ((string-prefix-p "Profile" prompt) "app")
+                         ((string-prefix-p "Forge provider" prompt) "github")
+                         ((string-prefix-p "Repository mode" prompt) "explicit repos")
+                         ((string-prefix-p "Linked GitHub App" prompt) "github.com/acme")
+                         ((string-prefix-p "Repository source" prompt) "Fetch from linked App")
+                         (t (ert-fail (format "unexpected prompt %S" prompt))))))
+                ((symbol-function 'completing-read-multiple)
+                 (lambda (&rest _) (ert-fail "failure imported repository candidates")))
+                ((symbol-function 'read-string)
+                 (lambda (&rest _) (ert-fail "failure fell through to an implicit manual prompt")))
+                ((symbol-function 'safeslop--call-json-async)
+                 (lambda (args callback &optional _stderr)
+                   (push args calls)
+                   (funcall callback
+                            (safeslop-contract-parse-string
+                             (cond ((equal (seq-take args 2) '("profile" "list")) safeslop-test-profile-list-json)
+                                   ((equal (seq-take args 2) '("creds" "show")) safeslop-test-creds-show-offsnapshot-json)
+                                   (t safeslop-test-github-repositories-error-json))))))
+                ((symbol-function 'safeslop--show-envelope-buffer)
+                 (lambda (&rest _) (setq shown t))))
+        (safeslop-credentials-pick-repositories))
+      (should (equal (alist-get 'profile safeslop-credentials--repo-draft) "app"))
+      (should (equal (alist-get 'read-repos safeslop-credentials--repo-draft) '("acme/legacy")))
+      (should (equal (alist-get 'write-repos safeslop-credentials--repo-draft) '("acme/old-write"))))
+    (should shown)
+    (should-not (seq-some (lambda (args) (equal (seq-take args 3) '("profile" "credentials" "set"))) calls))))
+
+(ert-deftest safeslop-test-credentials-discover-ignores-stale-installation-repository-callback ()
+  "A late result from an older R invocation cannot open selectors or mutate the reused buffer."
+  (let (callbacks completion-count)
+    (with-temp-buffer
+      (safeslop-credentials-mode)
+      (setq safeslop-credentials--config-path "/ws/safeslop.cue"
+            safeslop-credentials--account-links
+            '(((forge . "github") (host . "github.com") (owner . "acme") (probe . "ok"))))
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (prompt &rest _)
+                   (cond ((string-prefix-p "Profile" prompt) "app")
+                         ((string-prefix-p "Forge provider" prompt) "github")
+                         ((string-prefix-p "Repository mode" prompt) "explicit repos")
+                         ((string-prefix-p "Linked GitHub App" prompt) "github.com/acme")
+                         ((string-prefix-p "Repository source" prompt) "Fetch from linked App")
+                         (t (ert-fail (format "unexpected prompt %S" prompt))))))
+                ((symbol-function 'completing-read-multiple)
+                 (lambda (&rest _) (cl-incf completion-count) nil))
+                ((symbol-function 'read-string)
+                 (lambda (&rest _) (ert-fail "stale test fell through to manual input")))
+                ((symbol-function 'yes-or-no-p) (lambda (&rest _) nil))
+                ((symbol-function 'safeslop--call-json-async)
+                 (lambda (args callback &optional _stderr)
+                   (if (equal (seq-take args 2) '("creds" "repositories"))
+                       (push callback callbacks)
+                     (funcall callback
+                              (safeslop-contract-parse-string
+                               (if (equal (seq-take args 2) '("profile" "list"))
+                                   safeslop-test-profile-list-json
+                                 safeslop-test-creds-show-empty-json)))))))
+        (safeslop-credentials-pick-repositories)
+        (safeslop-credentials-pick-repositories)
+        (should (= (length callbacks) 2))
+        (funcall (cadr callbacks) (safeslop-contract-parse-string safeslop-test-github-repositories-json))
+        (should (= completion-count 0))
+        (funcall (car callbacks) (safeslop-contract-parse-string safeslop-test-github-repositories-json))
+        (should (= completion-count 2))))))
+
+(ert-deftest safeslop-test-credentials-discover-warns-before-impossible-write ()
+  "A read-only installation hint requires explicit acknowledgement before write selection."
+  (let (prompts)
+    (with-temp-buffer
+      (safeslop-credentials-mode)
+      (setq safeslop-credentials--config-path "/ws/safeslop.cue"
+            safeslop-credentials--account-links
+            '(((forge . "github") (host . "github.com") (owner . "acme") (probe . "ok"))))
+      (cl-letf (((symbol-function 'completing-read)
+                 (lambda (prompt &rest _)
+                   (cond ((string-prefix-p "Profile" prompt) "app")
+                         ((string-prefix-p "Forge provider" prompt) "github")
+                         ((string-prefix-p "Repository mode" prompt) "explicit repos")
+                         ((string-prefix-p "Linked GitHub App" prompt) "github.com/acme")
+                         ((string-prefix-p "Repository source" prompt) "Fetch from linked App")
+                         (t (ert-fail (format "unexpected prompt %S" prompt))))))
+                ((symbol-function 'completing-read-multiple)
+                 (lambda (prompt &rest _)
+                   (if (string-prefix-p "Write" prompt) '("acme/api") nil)))
+                ((symbol-function 'read-string) (lambda (&rest _) (ert-fail "unexpected manual input")))
+                ((symbol-function 'yes-or-no-p)
+                 (lambda (prompt) (push prompt prompts) t))
+                ((symbol-function 'safeslop--call-json-async)
+                 (lambda (args callback &optional _stderr)
+                   (funcall callback
+                            (safeslop-contract-parse-string
+                             (cond ((equal (seq-take args 2) '("profile" "list")) safeslop-test-profile-list-json)
+                                   ((equal (seq-take args 2) '("creds" "show")) safeslop-test-creds-show-empty-json)
+                                   ((equal (seq-take args 2) '("creds" "repositories")) safeslop-test-github-repositories-read-json)
+                                   (t safeslop-test-mutation-ok-json))))))
+                ((symbol-function 'safeslop-credentials-refresh) (lambda () nil)))
+        (safeslop-credentials-pick-repositories)))
+    (should (seq-some (lambda (prompt)
+                        (string-match-p "currently.*read.*write.*launch" (downcase prompt)))
+                      prompts))))
 
 (ert-deftest safeslop-test-credentials-journey-universal-keys-dispatch ()
   "Displayed universal keys resolve to credential tasks in the raw mode map."

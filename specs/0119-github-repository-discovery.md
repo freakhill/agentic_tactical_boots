@@ -28,7 +28,7 @@ DECISIONS: `specs/research/2026-07-18-github-repository-discovery-ayo.md` and `s
   VERIFY:   `go test ./internal/engine/creds/githubapp ./internal/cli ./internal/jsoncontract -run 'Repositories|RepositoryDiscovery|Creds.*Repositories|ErrorCode' -count=1 -v`
   EXPECTED: Command exits 0; tests prove exact authority, complete/sorted selectors, fixed value-free outcomes, cancellation-safe cleanup, and no live provider calls.
 
-- [ ] T4 — Add meaningful RED Emacs discovery-journey tests
+- [x] T4 — Add meaningful RED Emacs discovery-journey tests
   FILE:     `emacs/test/safeslop-contract-test.el`, `emacs/test/safeslop-credentials-test.el`, `emacs/test/safeslop-ui-probe.el`
   CHANGE:   Add strict shared-envelope parser tests and trace the real `R` branch through visible account selection, explicit Fetch/manual choice, exact discovery argv, searchable read/write completion, capability warning, current/off-snapshot prefill, cancellation/failure/stale callback draft preservation, and unchanged final replacement confirmation. Tests fake async CLI only.
   VERIFY:   `out=$(mktemp); if emacs -Q --batch -L emacs -l ert -l emacs/test/safeslop-test.el -l emacs/test/safeslop-contract-test.el -l emacs/test/safeslop-credentials-test.el --eval '(ert-run-tests-batch-and-exit "safeslop-test-credentials-.*\(discover\|installation-repositor\)")' >"$out" 2>&1; then cat "$out"; rm -f "$out"; exit 1; fi; cat "$out"; rg -n 'FAILED|void-function|should.*:form' "$out"; rc=$?; rm -f "$out"; exit $rc`
