@@ -101,11 +101,13 @@ Baseline (2026-07-18, `ab08404`, clean main): focused session/container/CLI test
 
 ## Wave 2 — independent bounded safety model
 
-- [ ] Pin and verify the development-only TLC toolchain
+- [x] Pin and verify the development-only TLC toolchain
   FILE:     new `formal/tla2tools.lock`, new `scripts/check-tla-session.sh`, `.gitignore`, `Makefile`
   CHANGE:   Pin official TLA+ Tools v1.7.4 URL and SHA-256 `936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88`. Fetch via temporary file into ignored `.build/tla` only when absent, verify before every Java invocation, accept only a byte-identical `TLA2TOOLS_JAR`, support `TLA_OFFLINE=1`, stable locale/timezone, one worker, isolated metadir, retained artifacts, and fixed setup errors. Add a `bootstrap-tla-session` acquisition/verification target; do not add TLA to `make check` until conformance is complete.
   VERIFY:   `rm -rf .build/tla && make bootstrap-tla-session && TLA_OFFLINE=1 make bootstrap-tla-session && test ! -e formal/tla2tools.jar && git diff --check`
   EXPECTED: First use acquires only verified bytes; the offline rerun succeeds without network; bad/foreign bytes fail before Java; the shipped binary inputs do not reference TLA/Java.
+
+  TASK 2 EVIDENCE: Online bootstrap and an immediate `TLA_OFFLINE=1` rerun both verified the pinned digest. A foreign override and a corrupted cached jar both failed with the fixed `TLA+ Tools SHA256 mismatch` error before Java. `.build/tla` is ignored/untracked, and `go list -deps ./cmd/safeslop` contains no TLA/Java dependency.
 
 - [ ] Model the raw transactional session protocol and expected unsafe mutants
   FILE:     new `formal/session/SessionBoundary.tla`, `formal/session/SessionBoundary.cfg`, `formal/session/mutants/*.cfg`, `formal/session/README.md`, `scripts/check-tla-session.sh`, `Makefile`

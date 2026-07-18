@@ -14,7 +14,7 @@ CONTAINER_SRC := library/layer/container
 CONTAINER_DST := internal/engine/container/assets
 SYNCED        := allowlist.domains Dockerfile.agent Dockerfile.agent.tools proxy-image.lock.json proxy-image.index.json
 
-.PHONY: build test test-emacs test-emacs-ui-matrix test-container-images test-progressive-egress-smoke vet fmt fmtcheck check check-assets check-npm-locks check-proxy-image-lock check-active-surface-drift check-catalog-sync check-pivot-denylist check-host-helper-exec check-hostpath-imports sync-container-assets render-catalog install install-emacs install-mcp dist clean
+.PHONY: build test test-emacs test-emacs-ui-matrix test-container-images test-progressive-egress-smoke bootstrap-tla-session vet fmt fmtcheck check check-assets check-npm-locks check-proxy-image-lock check-active-surface-drift check-catalog-sync check-pivot-denylist check-host-helper-exec check-hostpath-imports sync-container-assets render-catalog install install-emacs install-mcp dist clean
 
 ## Build the local binary (static — no cgo, immune to the WARP/uv install path).
 build:
@@ -43,6 +43,9 @@ test-container-images:
 
 test-progressive-egress-smoke: build
 	SAFESLOP_BIN="$(CURDIR)/$(BINARY)" ci/progressive-egress-smoke.sh
+
+bootstrap-tla-session:
+	scripts/check-tla-session.sh bootstrap
 
 vet:
 	go vet ./...

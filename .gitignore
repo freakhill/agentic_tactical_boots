@@ -22,7 +22,8 @@ library/.generated/
 # Local ayo/FLO worker packets and evaluations; canonical decisions live in specs/.
 agent/tmp/
 
-# Go build artifacts
+# Development/build artifacts
+/.build/
 /safeslop
 /dist/
 *.test
