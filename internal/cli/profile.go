@@ -113,7 +113,7 @@ func cmdCreds() *cobra.Command {
 
 func cmdCredsWithDeps(d *dependencies) *cobra.Command {
 	c := &cobra.Command{Use: "creds", Short: "Inspect the credential posture of safeslop.cue profiles"}
-	c.AddCommand(cmdCredsListWithDeps(d), cmdCredsShowWithDeps(d), cmdCredsLink(), cmdCredsUnlink(), cmdCredsStatus(), cmdCredsGCWithDeps(d))
+	c.AddCommand(cmdCredsListWithDeps(d), cmdCredsShowWithDeps(d), cmdCredsLink(), cmdCredsUnlink(), cmdCredsStatus(), cmdCredsRepositoriesWithDeps(d), cmdCredsGCWithDeps(d))
 	return c
 }
 

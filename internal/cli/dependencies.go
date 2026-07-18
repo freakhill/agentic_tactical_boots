@@ -35,50 +35,54 @@ func (effect egressApplyEffect) Inspect(ctx context.Context) (container.EgressGe
 // dependencies is constructed once per command root. Command closures retain
 // that instance, so execution and test seams never rely on mutable package state.
 type dependencies struct {
-	jsonOut                 bool
-	now                     func() time.Time
-	store                   engsession.Store
-	profileProjectTrust     func(string, []byte) (trust.Status, error)
-	profileBuiltinIntegrity func(string, string) (bool, error)
-	profileWorkspace        func(string) profilePrerequisiteCheck
-	profileHelper           func(string) profilePrerequisiteCheck
-	profileRuntime          func(string) profilePrerequisiteCheck
-	profileAccountLinks     func(policy.Profile) profileAccountLinkChecks
-	catalogFetcher          policy.Fetcher
-	forgejoGCBaseForHost    func(string) string
-	newForgejoGCClient      func() creds.ForgejoHTTP
-	hostDiscoveryEnv        func() map[string]string
-	detectRuntime           func(runtimepkg.NetworkPolicy) (runtimepkg.Engine, error)
-	backendEngine           func(string) (runtimepkg.Engine, error)
-	gcImages                func(context.Context, runtimepkg.Engine, container.GCOptions, container.GCProtection) ([]string, error)
-	launchContainer         containerLauncher
-	reapDirectInvocation    func(runtimepkg.Engine, string) error
-	applyEgressOverlay      func(context.Context, engsession.Session, []container.SessionGrant) error
-	replaceEgressOverlay    func(context.Context, engsession.Session, []container.SessionGrant) error
-	beginEgressOverlayApply func(context.Context, engsession.Session, []container.SessionGrant) (egressApplyEffect, error)
-	inspectEgress           func(context.Context, engsession.Session) (container.EgressGeneration, error)
-	teardownEgress          func(engsession.Session) error
-	observeEgress           func(context.Context, engsession.Session) ([]container.EgressObservation, error)
-	processAlive            func(engsession.Session) bool
-	killProcess             func(int) error
-	waitProcess             func(int, engsession.Session) error
-	revokeCredentials       func(engsession.Session) error
-	wipeStageDir            func(engsession.Session) error
-	sessionSocket           func(engsession.Session) (string, bool)
-	chmodSocket             func(string, os.FileMode) error
-	removeSocket            func(string) error
-	hasInteractivePTY       func() bool
-	launchSupervisor        func(string) (launchedSupervisor, error)
-	detachReadyTimeout      time.Duration
-	hostLaunchConsent       func(string, policy.Profile, io.Reader, io.Writer) error
-	doctorHostExec          func() *hostexec.Resolver
-	stageHostExec           func() *hostexec.Resolver
-	credsProber             func() creds.Prober
-	writePolicy             func(string, []byte) error
-	writePolicyAtomically   func(string, []byte) error
-	stageRoot               func() (string, error)
-	removeStageDir          func(string) error
-	retainInvocationMarker  func(string) error
+	jsonOut                      bool
+	now                          func() time.Time
+	store                        engsession.Store
+	profileProjectTrust          func(string, []byte) (trust.Status, error)
+	profileBuiltinIntegrity      func(string, string) (bool, error)
+	profileWorkspace             func(string) profilePrerequisiteCheck
+	profileHelper                func(string) profilePrerequisiteCheck
+	profileRuntime               func(string) profilePrerequisiteCheck
+	profileAccountLinks          func(policy.Profile) profileAccountLinkChecks
+	catalogFetcher               policy.Fetcher
+	forgejoGCBaseForHost         func(string) string
+	newForgejoGCClient           func() creds.ForgejoHTTP
+	hostDiscoveryEnv             func() map[string]string
+	detectRuntime                func(runtimepkg.NetworkPolicy) (runtimepkg.Engine, error)
+	backendEngine                func(string) (runtimepkg.Engine, error)
+	gcImages                     func(context.Context, runtimepkg.Engine, container.GCOptions, container.GCProtection) ([]string, error)
+	launchContainer              containerLauncher
+	reapDirectInvocation         func(runtimepkg.Engine, string) error
+	applyEgressOverlay           func(context.Context, engsession.Session, []container.SessionGrant) error
+	replaceEgressOverlay         func(context.Context, engsession.Session, []container.SessionGrant) error
+	beginEgressOverlayApply      func(context.Context, engsession.Session, []container.SessionGrant) (egressApplyEffect, error)
+	inspectEgress                func(context.Context, engsession.Session) (container.EgressGeneration, error)
+	teardownEgress               func(engsession.Session) error
+	observeEgress                func(context.Context, engsession.Session) ([]container.EgressObservation, error)
+	processAlive                 func(engsession.Session) bool
+	killProcess                  func(int) error
+	waitProcess                  func(int, engsession.Session) error
+	revokeCredentials            func(engsession.Session) error
+	wipeStageDir                 func(engsession.Session) error
+	sessionSocket                func(engsession.Session) (string, bool)
+	chmodSocket                  func(string, os.FileMode) error
+	removeSocket                 func(string) error
+	hasInteractivePTY            func() bool
+	launchSupervisor             func(string) (launchedSupervisor, error)
+	detachReadyTimeout           time.Duration
+	hostLaunchConsent            func(string, policy.Profile, io.Reader, io.Writer) error
+	doctorHostExec               func() *hostexec.Resolver
+	stageHostExec                func() *hostexec.Resolver
+	credsProber                  func() creds.Prober
+	repositoryAccountsPath       func() (string, error)
+	repositoryResolveSecret      func(context.Context, string) (string, error)
+	newRepositoryDiscoveryClient func() githubRepositoryDiscoveryClient
+	repositoryCleanupContext     func() (context.Context, context.CancelFunc)
+	writePolicy                  func(string, []byte) error
+	writePolicyAtomically        func(string, []byte) error
+	stageRoot                    func() (string, error)
+	removeStageDir               func(string) error
+	retainInvocationMarker       func(string) error
 }
 
 func defaultDependencies() *dependencies {

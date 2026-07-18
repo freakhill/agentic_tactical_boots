@@ -16,7 +16,7 @@ DECISIONS: `specs/research/2026-07-18-github-repository-discovery-ayo.md` and `s
   VERIFY:   `git diff --check && rg -n 'metadata:read|CREDENTIAL_REVOKE_FAILED|snapshot, not authorization|shared envelope|WORKTREE:.*0119' specs/research/2026-07-18-github-repository-discovery-{ayo,flo}.md specs/0119-github-repository-discovery.md`
   EXPECTED: Command exits 0 and the notes resolve every contested lifecycle/contract choice without values or personal account state.
 
-- [ ] T2 — Add meaningful RED provider and CLI contract tests
+- [x] T2 — Add meaningful RED provider and CLI contract tests
   FILE:     `internal/engine/creds/githubapp/repositories.go`, `internal/engine/creds/githubapp/repositories_test.go`, `internal/cli/creds_repositories.go`, `internal/cli/creds_repositories_test.go`, `internal/cli/dependencies.go`, `internal/cli/profile.go`
   CHANGE:   Introduce only the minimum compile-safe discovery signatures/stubs, then tests for exact metadata-only/no-selector minting, fixed bounded pagination/validation/sorting, one-account lookup, shared success/error envelopes, secret/ref/raw-body exclusion, command-local cancellation, independent cleanup context, and exactly one post-mint revoke. Assert the stubs fail on missing behavior, not syntax/plumbing.
   VERIFY:   `out=$(mktemp); if go test ./internal/engine/creds/githubapp ./internal/cli -run 'Repositories|RepositoryDiscovery' -count=1 >"$out" 2>&1; then cat "$out"; rm -f "$out"; exit 1; fi; cat "$out"; rg -n 'not implemented|want .* got|unexpected' "$out"; rc=$?; rm -f "$out"; exit $rc`
