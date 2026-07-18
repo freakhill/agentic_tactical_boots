@@ -1,14 +1,18 @@
 package githubapp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"reflect"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -43,6 +47,95 @@ func repositoryPage(t *testing.T, total int, names []string, extra map[string]an
 		t.Fatal(err)
 	}
 	return body
+}
+
+func TestRepositoryInstallationReportsBoundedContentsMaximum(t *testing.T) {
+	keyPEM, _ := testKeyPEM(t)
+	for _, tt := range []struct {
+		name, permission, want string
+		err                    bool
+	}{
+		{name: "none", want: "none"},
+		{name: "read", permission: "read", want: "read"},
+		{name: "write", permission: "write", want: "write"},
+		{name: "invalid", permission: "admin", err: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			permissions := map[string]string{}
+			if tt.permission != "" {
+				permissions["contents"] = tt.permission
+			}
+			body, _ := json.Marshal(map[string]any{
+				"id": 99, "app_id": 42,
+				"account":     map[string]any{"login": "Acme", "type": "Organization"},
+				"permissions": permissions,
+			})
+			client := New(&fakeHTTP{respStatus: 200, respBody: body}, "https://api.example.test")
+			owner, maximum, err := client.RepositoryInstallation(context.Background(), 42, 99, keyPEM)
+			if tt.err {
+				if err == nil || !strings.Contains(err.Error(), ErrRepositoryListInvalid.Error()) {
+					t.Fatalf("error = %v", err)
+				}
+				return
+			}
+			if err != nil || owner != "Acme" || maximum != tt.want {
+				t.Fatalf("owner=%q maximum=%q err=%v", owner, maximum, err)
+			}
+		})
+	}
+}
+
+func TestDiscoveryMintPayloadHasOnlyMetadataReadAndNoRepositorySelector(t *testing.T) {
+	keyPEM, _ := testKeyPEM(t)
+	fake := &fakeHTTP{
+		respStatus: 201,
+		respBody:   []byte(`{"token":"ghs_x","expires_at":"2026-07-18T01:00:00Z"}`),
+	}
+	_, err := New(fake, "https://api.example.test").MintToken(context.Background(), 42, 99, keyPEM, MintRequest{
+		Permissions: map[string]string{"metadata": "read"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(fake.body, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload) != 1 {
+		t.Fatalf("mint payload has extra fields: %#v", payload)
+	}
+	if !reflect.DeepEqual(payload["permissions"], map[string]any{"metadata": "read"}) {
+		t.Fatalf("permissions = %#v", payload["permissions"])
+	}
+	for _, forbidden := range []string{"repositories", "repository_ids"} {
+		if _, exists := payload[forbidden]; exists {
+			t.Fatalf("mint payload included %s: %#v", forbidden, payload)
+		}
+	}
+}
+
+func TestRepositoryDiscoveryMintUncertaintyIsTypedAndValueFree(t *testing.T) {
+	keyPEM, _ := testKeyPEM(t)
+	for _, fake := range []*fakeHTTP{
+		{respErr: errors.New("RAW_TRANSPORT_SECRET")},
+		{respStatus: 500, respBody: []byte(`{"token":"RAW_BODY_SECRET"}`)},
+		{respStatus: 201, respBody: []byte(`{"token":"ghs_cleanup","expires_at":"invalid"}`)},
+	} {
+		token, err := New(fake, "https://api.example.test").MintToken(context.Background(), 42, 99, keyPEM, MintRequest{
+			Permissions: map[string]string{"metadata": "read"},
+		})
+		if !errors.Is(err, ErrTokenMintUncertain) {
+			t.Fatalf("error = %v, want ErrTokenMintUncertain", err)
+		}
+		if fake.respStatus == 201 && (token == nil || token.Token != "ghs_cleanup") {
+			t.Fatalf("cleanup token = %#v", token)
+		}
+		for _, forbidden := range []string{"RAW_TRANSPORT_SECRET", "RAW_BODY_SECRET", "ghs_cleanup"} {
+			if strings.Contains(err.Error(), forbidden) {
+				t.Fatalf("uncertain error leaked %q: %v", forbidden, err)
+			}
+		}
+	}
 }
 
 func TestListRepositoriesPaginatesValidatesAndSorts(t *testing.T) {
@@ -99,6 +192,45 @@ func TestListRepositoriesPaginatesValidatesAndSorts(t *testing.T) {
 	}
 }
 
+func TestListRepositoriesBoundaryCounts(t *testing.T) {
+	for _, total := range []int{1, 100, 10_000} {
+		t.Run(fmt.Sprintf("count_%d", total), func(t *testing.T) {
+			fake := &repositoryHTTP{}
+			fake.do = func(_, rawURL string, _ map[string]string) ([]byte, int, error) {
+				u, err := url.Parse(rawURL)
+				if err != nil {
+					t.Fatal(err)
+				}
+				pageNumber := 0
+				if _, err := fmt.Sscanf(u.Query().Get("page"), "%d", &pageNumber); err != nil {
+					t.Fatal(err)
+				}
+				start := (pageNumber - 1) * repositoriesPerPage
+				end := start + repositoriesPerPage
+				if end > total {
+					end = total
+				}
+				names := make([]string, 0, end-start)
+				for i := start; i < end; i++ {
+					names = append(names, fmt.Sprintf("acme/repo-%05d", i))
+				}
+				return repositoryPage(t, total, names, nil), 200, nil
+			}
+			got, err := New(fake, "https://api.example.test").ListRepositories(context.Background(), "ghs_x", "acme")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Repositories) != total {
+				t.Fatalf("repositories = %d, want %d", len(got.Repositories), total)
+			}
+			wantRequests := (total + repositoriesPerPage - 1) / repositoriesPerPage
+			if len(fake.requests) != wantRequests {
+				t.Fatalf("requests = %d, want %d", len(fake.requests), wantRequests)
+			}
+		})
+	}
+}
+
 func TestListRepositoriesZeroStillValidatesOnePage(t *testing.T) {
 	fake := &repositoryHTTP{do: func(_, _ string, _ map[string]string) ([]byte, int, error) {
 		return repositoryPage(t, 0, nil, nil), 200, nil
@@ -122,6 +254,7 @@ func TestListRepositoriesRejectsUntrustedProviderShapes(t *testing.T) {
 		limit bool
 	}{
 		{name: "over limit", body: repositoryPage(t, maxRepositories+1, nil, nil), limit: true},
+		{name: "body limit", body: bytes.Repeat([]byte{'x'}, maxRepositoryPageBytes+1), limit: true},
 		{name: "wrong owner", body: repositoryPage(t, 1, []string{"other/repo"}, nil)},
 		{name: "invalid selector", body: repositoryPage(t, 1, []string{"acme/repo/extra"}, nil)},
 		{name: "case folded duplicate", body: repositoryPage(t, 2, []string{"acme/Repo", "ACME/repo"}, nil)},
@@ -145,6 +278,26 @@ func TestListRepositoriesRejectsUntrustedProviderShapes(t *testing.T) {
 				t.Fatalf("error = %v, want class %v", err, want)
 			}
 		})
+	}
+}
+
+func TestRepositoryDiscoveryHTTPDoesNotFollowRedirects(t *testing.T) {
+	var targetHit atomic.Bool
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		targetHit.Store(true)
+	}))
+	defer target.Close()
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	defer source.Close()
+
+	_, err := New(NewHTTP(), source.URL).ListRepositories(context.Background(), "ghs_REDIRECT_SECRET", "acme")
+	if !errors.Is(err, ErrRepositoryListUnavailable) {
+		t.Fatalf("redirect error = %v", err)
+	}
+	if targetHit.Load() {
+		t.Fatal("repository discovery followed a provider redirect")
 	}
 }
 

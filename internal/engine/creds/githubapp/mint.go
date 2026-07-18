@@ -16,6 +16,11 @@ const (
 	maxReposPerTok = 500 // GitHub caps repositories per installation-token request (specs/0068 G2)
 )
 
+// ErrTokenMintUncertain means GitHub may have created a token but the caller did not receive a
+// complete usable response. Callers that have token bytes must attempt cleanup; otherwise expiry
+// is the only bound. The wrapped error never contains provider bodies or credential bytes.
+var ErrTokenMintUncertain = errors.New("github token mint outcome is uncertain")
+
 // Client mints and revokes installation tokens over a ForgeHTTP seam. apiBase defaults to
 // https://api.github.com; tests point it at httptest.
 type Client struct {
@@ -41,11 +46,12 @@ func appHeaders(jwt string) map[string]string {
 
 // Installation is the non-secret metadata of GET /app/installations/{id}.
 type Installation struct {
-	ID         int    `json:"id"`
-	AppID      int    `json:"app_id"`
-	AppSlug    string `json:"app_slug"`
-	TargetType string `json:"target_type"`
-	Account    struct {
+	ID          int               `json:"id"`
+	AppID       int               `json:"app_id"`
+	AppSlug     string            `json:"app_slug"`
+	TargetType  string            `json:"target_type"`
+	Permissions map[string]string `json:"permissions"`
+	Account     struct {
 		Login string `json:"login"`
 		Type  string `json:"type"`
 	} `json:"account"`
@@ -117,11 +123,13 @@ func (c *Client) MintToken(ctx context.Context, appID, instID int, keyPEM []byte
 	url := fmt.Sprintf("%s/app/installations/%d/access_tokens", c.apiBase, instID)
 	body, status, err := c.http.Do(ctx, http.MethodPost, url, appHeaders(jwt), reqBody)
 	if err != nil {
-		return nil, fmt.Errorf("github: token mint transport error: %w", err)
+		return nil, ErrTokenMintUncertain
 	}
 	switch {
 	case status == http.StatusUnprocessableEntity || status == http.StatusNotFound:
 		return nil, fmt.Errorf("github: the App installation cannot access one or more of [%s] — install the GitHub App on them (HTTP %d)", strings.Join(req.Repositories, ", "), status)
+	case status >= 500:
+		return nil, ErrTokenMintUncertain
 	case status/100 != 2:
 		return nil, fmt.Errorf("github: token mint failed (HTTP %d)", status)
 	}
@@ -130,14 +138,14 @@ func (c *Client) MintToken(ctx context.Context, appID, instID int, keyPEM []byte
 		ExpiresAt string `json:"expires_at"`
 	}
 	if err := json.Unmarshal(body, &out); err != nil {
-		return nil, errors.New("github: could not parse token response")
+		return nil, ErrTokenMintUncertain
 	}
 	if out.Token == "" {
-		return nil, errors.New("github: token response contained no token")
+		return nil, ErrTokenMintUncertain
 	}
 	exp, err := time.Parse(time.RFC3339, out.ExpiresAt)
 	if err != nil {
-		return nil, errors.New("github: could not parse token expiry")
+		return &Token{Token: out.Token}, ErrTokenMintUncertain
 	}
 	return &Token{Token: out.Token, ExpiresAt: exp}, nil
 }

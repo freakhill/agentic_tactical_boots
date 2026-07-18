@@ -15,19 +15,20 @@ import (
 )
 
 type fakeRepositoryDiscoveryClient struct {
-	owner, maximum  string
-	installationErr error
-	mintErr         error
-	listErr         error
-	revokeErr       error
-	token           string
-	expiresAt       time.Time
-	repositories    []string
-	mintRequest     githubapp.MintRequest
-	keyBytes        string
-	revokes         int
-	revokeContextOK bool
-	listHook        func()
+	owner, maximum         string
+	installationErr        error
+	mintErr                error
+	returnTokenOnMintError bool
+	listErr                error
+	revokeErr              error
+	token                  string
+	expiresAt              time.Time
+	repositories           []string
+	mintRequest            githubapp.MintRequest
+	keyBytes               string
+	revokes                int
+	revokeContextOK        bool
+	listHook               func()
 }
 
 func (f *fakeRepositoryDiscoveryClient) RepositoryInstallation(_ context.Context, _, _ int, key []byte) (string, string, error) {
@@ -38,6 +39,9 @@ func (f *fakeRepositoryDiscoveryClient) RepositoryInstallation(_ context.Context
 func (f *fakeRepositoryDiscoveryClient) MintToken(_ context.Context, _, _ int, _ []byte, req githubapp.MintRequest) (*githubapp.Token, error) {
 	f.mintRequest = req
 	if f.mintErr != nil {
+		if f.returnTokenOnMintError {
+			return &githubapp.Token{Token: f.token}, f.mintErr
+		}
 		return nil, f.mintErr
 	}
 	return &githubapp.Token{Token: f.token, ExpiresAt: f.expiresAt}, nil
@@ -164,6 +168,24 @@ func TestRepositoryDiscoveryCancellationStillUsesIndependentCleanupContext(t *te
 	}
 }
 
+func TestRepositoryDiscoveryEveryPostMintFailureRevokesOnce(t *testing.T) {
+	for _, listErr := range []error{
+		githubapp.ErrRepositoryListInvalid,
+		githubapp.ErrRepositoryListLimit,
+		githubapp.ErrRepositoryListUnavailable,
+		context.DeadlineExceeded,
+	} {
+		client := &fakeRepositoryDiscoveryClient{listErr: listErr}
+		env := runRepositoryDiscovery(context.Background(), "github.com/acme", repositoryRuntimeForTest(t, client))
+		if env.OK || client.revokes != 1 || !client.revokeContextOK {
+			t.Fatalf("listErr=%v envelope=%+v revokes=%d contextOK=%v", listErr, env, client.revokes, client.revokeContextOK)
+		}
+		if len(env.Data) != 0 {
+			t.Fatalf("listErr=%v exposed data %#v", listErr, env.Data)
+		}
+	}
+}
+
 func TestRepositoryDiscoveryPreMintFailureDoesNotRevoke(t *testing.T) {
 	client := &fakeRepositoryDiscoveryClient{mintErr: errors.New("RAW_MINT_PROVIDER_BODY")}
 	env := runRepositoryDiscovery(context.Background(), "github.com/acme", repositoryRuntimeForTest(t, client))
@@ -173,6 +195,44 @@ func TestRepositoryDiscoveryPreMintFailureDoesNotRevoke(t *testing.T) {
 	wire, _ := json.Marshal(env)
 	if strings.Contains(string(wire), "RAW_MINT_PROVIDER_BODY") {
 		t.Fatalf("provider error leaked: %s", wire)
+	}
+}
+
+func TestRepositoryDiscoveryUncertainMintIsLoudWithoutCandidates(t *testing.T) {
+	client := &fakeRepositoryDiscoveryClient{mintErr: githubapp.ErrTokenMintUncertain}
+	env := runRepositoryDiscovery(context.Background(), "github.com/acme", repositoryRuntimeForTest(t, client))
+	if env.OK || len(env.Errors) != 1 || env.Errors[0].Code != jsoncontract.CodeCredentialRevokeFailed {
+		t.Fatalf("envelope = %+v", env)
+	}
+	if len(env.Data) != 0 || client.revokes != 0 {
+		t.Fatalf("uncertain mint data=%#v revokes=%d", env.Data, client.revokes)
+	}
+}
+
+func TestRepositoryDiscoveryInvalidMintResponseRevokesReturnedToken(t *testing.T) {
+	client := &fakeRepositoryDiscoveryClient{
+		mintErr:                githubapp.ErrTokenMintUncertain,
+		returnTokenOnMintError: true,
+	}
+	env := runRepositoryDiscovery(context.Background(), "github.com/acme", repositoryRuntimeForTest(t, client))
+	if env.OK || len(env.Errors) != 1 || env.Errors[0].Code != jsoncontract.CodeIOError {
+		t.Fatalf("envelope = %+v", env)
+	}
+	if client.revokes != 1 || !client.revokeContextOK {
+		t.Fatalf("revokes=%d contextOK=%v", client.revokes, client.revokeContextOK)
+	}
+}
+
+func TestRepositoryDiscoveryMissingMintTokenIsCleanupUncertain(t *testing.T) {
+	client := &fakeRepositoryDiscoveryClient{}
+	runtime := repositoryRuntimeForTest(t, client)
+	client.token = ""
+	env := runRepositoryDiscovery(context.Background(), "github.com/acme", runtime)
+	if env.OK || len(env.Errors) != 1 || env.Errors[0].Code != jsoncontract.CodeCredentialRevokeFailed {
+		t.Fatalf("envelope = %+v", env)
+	}
+	if client.revokes != 0 {
+		t.Fatalf("cannot revoke an absent token, got %d calls", client.revokes)
 	}
 }
 
@@ -205,6 +265,22 @@ func TestRepositoryDiscoveryRejectsOverlongTokenLifetimeThenRevokes(t *testing.T
 	}
 	if client.revokes != 1 {
 		t.Fatalf("revokes = %d, want 1", client.revokes)
+	}
+}
+
+func TestCredsRepositoriesInvalidArityUsesSharedEnvelope(t *testing.T) {
+	for _, args := range [][]string{
+		{"creds", "repositories", "--output", "json"},
+		{"creds", "repositories", "github.com/acme", "github.com/other", "--output", "json"},
+	} {
+		out, err := runRootForTest(t, t.TempDir(), args...)
+		if !errors.Is(err, errOutputEmitted) {
+			t.Fatalf("args=%v err=%v out=%s", args, err, out)
+		}
+		env := parseEnvelopeForTest(t, out)
+		if env.OK || len(env.Errors) != 1 || env.Errors[0].Code != jsoncontract.CodeInvalidArgument {
+			t.Fatalf("args=%v envelope=%+v", args, env)
+		}
 	}
 }
 

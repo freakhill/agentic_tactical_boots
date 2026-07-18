@@ -22,9 +22,16 @@ type ForgeHTTP interface {
 // httpClient is the production ForgeHTTP.
 type httpClient struct{ c *http.Client }
 
+const maxForgeHTTPResponseBytes = (4 << 20) + 1
+
 // NewHTTP returns the net/http-backed ForgeHTTP with a bounded timeout.
 func NewHTTP() ForgeHTTP {
-	return &httpClient{c: &http.Client{Timeout: 30 * time.Second}}
+	return &httpClient{c: &http.Client{
+		Timeout: 30 * time.Second,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}}
 }
 
 func (h *httpClient) Do(ctx context.Context, method, url string, headers map[string]string, body []byte) ([]byte, int, error) {
@@ -44,6 +51,9 @@ func (h *httpClient) Do(ctx context.Context, method, url string, headers map[str
 		return nil, 0, err
 	}
 	defer resp.Body.Close()
-	b, _ := io.ReadAll(resp.Body)
+	b, err := io.ReadAll(io.LimitReader(resp.Body, maxForgeHTTPResponseBytes))
+	if err != nil {
+		return nil, 0, err
+	}
 	return b, resp.StatusCode, nil
 }

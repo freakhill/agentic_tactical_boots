@@ -22,7 +22,7 @@ DECISIONS: `specs/research/2026-07-18-github-repository-discovery-ayo.md` and `s
   VERIFY:   `out=$(mktemp); if go test ./internal/engine/creds/githubapp ./internal/cli -run 'Repositories|RepositoryDiscovery' -count=1 >"$out" 2>&1; then cat "$out"; rm -f "$out"; exit 1; fi; cat "$out"; rg -n 'not implemented|want .* got|unexpected' "$out"; rc=$?; rm -f "$out"; exit $rc`
   EXPECTED: Wrapper exits 0 only because focused tests compile and fail for the explicit unimplemented discovery behavior.
 
-- [ ] T3 — Implement bounded GitHub discovery and lifecycle-owning CLI
+- [x] T3 — Implement bounded GitHub discovery and lifecycle-owning CLI
   FILE:     `internal/engine/creds/githubapp/http.go`, `internal/engine/creds/githubapp/mint.go`, `internal/engine/creds/githubapp/repositories.go`, `internal/engine/creds/githubapp/repositories_test.go`, `internal/cli/creds_repositories.go`, `internal/cli/creds_repositories_test.go`, `internal/cli/dependencies.go`, `internal/cli/profile.go`, `internal/jsoncontract/*` only if an existing code/fixture needs extension
   CHANGE:   Resolve exactly one `github.com/<owner>` link, verify owner/current Contents maximum, mint exactly metadata-read with no repo selector, enumerate fixed bounded pages and validate only `full_name`, buffer candidates, and revoke once before output using a fresh ten-second cleanup context. Add command-local signal cancellation. Emit existing v1 shared envelopes; withhold candidates on every error, especially cleanup uncertainty. Reuse seams and add no dependency.
   VERIFY:   `go test ./internal/engine/creds/githubapp ./internal/cli ./internal/jsoncontract -run 'Repositories|RepositoryDiscovery|Creds.*Repositories|ErrorCode' -count=1 -v`

@@ -104,15 +104,15 @@ func buildLockfile(prof policy.Profile, resolved *policy.Resolved, recipe *conta
 
 // cmdProfile groups the enveloped policy surfaces the Emacs profiles view consumes
 // (specs/0052 E2/E3, specs/0058 IW3).
-// cmdCreds groups read-only credential-posture inspection over safeslop.cue (specs/0067). Authoring
-// stays CUE-canonical (edit safeslop.cue itself); this surface only reads and reports value-free
-// readiness status — it never handles or reveals a secret value.
+// cmdCreds groups value-free credential posture plus explicit host-owned forge account operations.
+// Profile authoring stays CUE-canonical through typed mutation commands; no command reveals a
+// secret value, and repository discovery is a separate operator action from passive inspection.
 func cmdCreds() *cobra.Command {
 	return cmdCredsWithDeps(defaultDependencies())
 }
 
 func cmdCredsWithDeps(d *dependencies) *cobra.Command {
-	c := &cobra.Command{Use: "creds", Short: "Inspect the credential posture of safeslop.cue profiles"}
+	c := &cobra.Command{Use: "creds", Short: "Inspect credential posture and manage linked forge accounts"}
 	c.AddCommand(cmdCredsListWithDeps(d), cmdCredsShowWithDeps(d), cmdCredsLink(), cmdCredsUnlink(), cmdCredsStatus(), cmdCredsRepositoriesWithDeps(d), cmdCredsGCWithDeps(d))
 	return c
 }
