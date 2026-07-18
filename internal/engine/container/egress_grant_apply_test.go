@@ -72,8 +72,24 @@ func TestApplyEgressGenerationReplacesAndAcknowledgesProxy(t *testing.T) {
 	if got != wanted {
 		t.Fatalf("generation = %+v, want %+v", got, wanted)
 	}
-	eng.assertRan(t, composeCommandKeyWithOverrides(t, composeFile, []string{override}, "up", "-d", "--no-deps", "--force-recreate", "proxy"))
-	eng.assertRan(t, composeCommandKeyWithOverrides(t, composeFile, []string{override}, "exec", "-T", "proxy", "bash", "-ec", proxyReadyCommand))
+	up := composeCommandKeyWithOverrides(t, composeFile, []string{override}, "up", "-d", "--no-deps", "--force-recreate", "proxy")
+	ready := composeCommandKeyWithOverrides(t, composeFile, []string{override}, "exec", "-T", "proxy", "bash", "-ec", proxyReadyCommand)
+	eng.assertRan(t, up)
+	eng.assertRan(t, ready)
+	eng.mu.Lock()
+	runs := append([]string(nil), eng.runs...)
+	eng.mu.Unlock()
+	wantRuns := []string{
+		up,
+		ready,
+		composeCommandKeyWithOverrides(t, composeFile, []string{override}, "ps", "--status", "running", "-q", "proxy"),
+		"ps -q --filter label=com.docker.compose.project=" + filepath.Base(dir) + " --filter label=com.docker.compose.service=proxy",
+		"inspect -f " + proxyGenerationInspectFormat + " proxy-id-full",
+		composeCommandKeyWithOverrides(t, composeFile, []string{override}, "exec", "-T", "proxy", "sha256sum", "/etc/squid/safeslop.d/session-grants.conf"),
+	}
+	if strings.Join(runs, "\n") != strings.Join(wantRuns, "\n") {
+		t.Fatalf("ApplyEgressGeneration command order:\n got %q\nwant %q", runs, wantRuns)
+	}
 	body, err := os.ReadFile(filepath.Join(dir, "proxy-overlay", "session-grants.conf"))
 	if err != nil {
 		t.Fatal(err)
@@ -96,6 +112,44 @@ func TestApplyEgressGenerationReplacesAndAcknowledgesProxy(t *testing.T) {
 		if !strings.Contains(string(overrideBody), want) {
 			t.Fatalf("override missing %q:\n%s", want, overrideBody)
 		}
+	}
+}
+
+func TestReplaceEgressGenerationIsSeparateFromPositiveInspect(t *testing.T) {
+	grants := []SessionGrant{{Host: "example.com", Port: 443}}
+	dir, composeFile, override, wanted, eng := egressGenerationFixture(t, 2, grants)
+
+	got, err := ReplaceEgressGeneration(context.Background(), eng, composeFile, dir, grants, 2)
+	if err != nil {
+		t.Fatalf("ReplaceEgressGeneration: %v", err)
+	}
+	if got != wanted {
+		t.Fatalf("replacement generation = %+v, want %+v", got, wanted)
+	}
+	eng.assertRan(t, composeCommandKeyWithOverrides(t, composeFile, []string{override}, "up", "-d", "--no-deps", "--force-recreate", "proxy"))
+	eng.assertNotRan(t, composeCommandKeyWithOverrides(t, composeFile, []string{override}, "exec", "-T", "proxy", "bash", "-ec", proxyReadyCommand))
+	eng.assertNotRan(t, "inspect")
+	eng.assertNotRan(t, "ps")
+
+	eng.outputs[composeCommandKey(t, composeFile, "ps", "--status", "running", "-q", "proxy")] = "proxy-id-full\n"
+	eng.outputs[composeCommandKey(t, composeFile, "exec", "-T", "proxy", "sha256sum", "/etc/squid/safeslop.d/session-grants.conf")] = wanted.Hash + "  file\n"
+	inspected, err := InspectEgressGeneration(context.Background(), eng, composeFile)
+	if err != nil {
+		t.Fatalf("InspectEgressGeneration after replacement: %v", err)
+	}
+	if inspected != wanted {
+		t.Fatalf("inspected generation = %+v, want %+v", inspected, wanted)
+	}
+}
+
+func TestInspectEgressGenerationRequiredAfterReplaceSuccess(t *testing.T) {
+	grants := []SessionGrant{{Host: "example.com", Port: 443}}
+	dir, composeFile, _, _, eng := egressGenerationFixture(t, 3, grants)
+	if _, err := ReplaceEgressGeneration(context.Background(), eng, composeFile, dir, grants, 3); err != nil {
+		t.Fatalf("ReplaceEgressGeneration: %v", err)
+	}
+	if _, err := InspectEgressGeneration(context.Background(), eng, composeFile); !errors.Is(err, ErrEgressGenerationUncertain) {
+		t.Fatalf("missing positive inspect error = %v, want ErrEgressGenerationUncertain", err)
 	}
 }
 

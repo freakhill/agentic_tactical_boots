@@ -43,6 +43,9 @@ func TestSessionRuntimeOperationsFailClosedWhenBackendUnavailable(t *testing.T) 
 	if err := d.applyEgressOverlay(t.Context(), sess, nil); !errors.Is(err, ErrSessionBackendUnavailable) {
 		t.Fatalf("apply error = %v, want fixed backend error", err)
 	}
+	if err := d.replaceEgressOverlay(t.Context(), sess, nil); !errors.Is(err, ErrSessionBackendUnavailable) {
+		t.Fatalf("replace error = %v, want fixed backend error", err)
+	}
 	if _, err := d.inspectEgress(t.Context(), sess); !errors.Is(err, ErrSessionBackendUnavailable) {
 		t.Fatalf("inspect error = %v, want fixed backend error", err)
 	}

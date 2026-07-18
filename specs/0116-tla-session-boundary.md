@@ -165,11 +165,13 @@ Baseline (2026-07-18, `ab08404`, clean main): focused session/container/CLI test
 
 ## Wave 5 — route egress authority through the reducer
 
-- [ ] Separate runtime apply and positive inspect effects without behavior change
+- [x] Separate runtime apply and positive inspect effects without behavior change
   FILE:     `internal/engine/container/{egress_grant_apply.go,egress_grant_apply_test.go}`, `internal/cli/{dependencies.go,egress_grant_apply_test.go}`, `internal/engine/egress/generation.go`
   CHANGE:   Characterize then expose the already-existing apply/replace and generation/hash inspect boundaries as separately classifiable effects. Keep current wrapper APIs, exact proxy replacement, readiness/hash ACK, uncertainty errors, overlay bytes, and command ordering. This is effect-boundary extraction only; do not route authority decisions or change behavior yet.
   VERIFY:   `go test ./internal/engine/container ./internal/cli -run 'ApplyEgressGeneration|InspectEgressGeneration|Proxy|Generation|Ack|Uncertain' -count=1 -v && go test -race ./internal/engine/container ./internal/cli -run 'EgressGeneration|Proxy' -count=1 && make check-tla-session`
   EXPECTED: Existing callers and fake-engine argv remain compatible; apply success cannot stand in for inspect ACK; model graphs are unchanged.
+
+  TASK 9 EVIDENCE: `ReplaceEgressGeneration` now exposes overlay install plus exact force-recreate as an apply-only boundary, while `InspectEgressGeneration` remains the independent readiness/revision/label/file-hash proof. The existing Apply/Ensure wrappers and current CLI callers retain their combined positive-ACK behavior. Tests pin unchanged command order/argv and overlay bytes, prove replacement emits no inspect command, and prove a successful replacement cannot substitute for a matching inspect. CLI dependencies expose separate replacement and inspection seams for reducer routing. Focused, race, full Go, model/mutant, graph, and diff gates exited 0; no reducer relation changed.
 
 - [ ] Route running-session widen through the reducer
   FILE:     `internal/engine/session/{protocol.go,protocol_test.go,egress_grant.go}`, new `internal/cli/session_protocol.go`, `internal/cli/{session.go,dependencies.go,egress_grant_apply_test.go,session_concurrency_test.go}`, transaction tests, mutation allowlist

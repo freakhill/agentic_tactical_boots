@@ -36,13 +36,33 @@ func ApplySessionGrants(ctx context.Context, eng runtime.Engine, composeFile, ru
 	return err
 }
 
-// ApplyEgressGeneration atomically installs candidate bytes inside a directory
-// bind, force-replaces the sole proxy, and returns only after an inspectable
-// generation/hash ACK. It never treats a signal/reconfigure exit as an ACK.
+// ReplaceEgressGeneration atomically installs candidate bytes inside a
+// directory bind and force-replaces the sole proxy. Success classifies only the
+// apply boundary; callers must use InspectEgressGeneration for a positive
+// generation/hash ACK.
+func ReplaceEgressGeneration(ctx context.Context, eng runtime.Engine, composeFile, runtimeDir string, grants []SessionGrant, revision int, opts ...OverlayOption) (EgressGeneration, error) {
+	generation, _, err := replaceEgressGeneration(ctx, eng, composeFile, runtimeDir, grants, revision, opts...)
+	return generation, err
+}
+
+// ApplyEgressGeneration preserves the compatibility API that combines proxy
+// replacement with a positive generation/hash ACK. It never treats replacement
+// command success as that ACK.
 func ApplyEgressGeneration(ctx context.Context, eng runtime.Engine, composeFile, runtimeDir string, grants []SessionGrant, revision int, opts ...OverlayOption) (EgressGeneration, error) {
-	generation, body, err := BuildEgressGeneration(grants, revision)
+	generation, files, err := replaceEgressGeneration(ctx, eng, composeFile, runtimeDir, grants, revision, opts...)
 	if err != nil {
 		return EgressGeneration{}, err
+	}
+	if err := waitForProxyGeneration(ctx, eng, composeFile, files, generation); err != nil {
+		return EgressGeneration{}, ErrEgressGenerationUncertain
+	}
+	return generation, nil
+}
+
+func replaceEgressGeneration(ctx context.Context, eng runtime.Engine, composeFile, runtimeDir string, grants []SessionGrant, revision int, opts ...OverlayOption) (EgressGeneration, []string, error) {
+	generation, body, err := BuildEgressGeneration(grants, revision)
+	if err != nil {
+		return EgressGeneration{}, nil, err
 	}
 	options := overlayOptions{}
 	for _, option := range opts {
@@ -50,20 +70,17 @@ func ApplyEgressGeneration(ctx context.Context, eng runtime.Engine, composeFile,
 	}
 	overrideFile, err := installEgressGeneration(runtimeDir, generation, body, options)
 	if err != nil {
-		return EgressGeneration{}, err
+		return EgressGeneration{}, nil, err
 	}
 	files := []string{overrideFile}
 	upArgs, err := composeProjectArgsWithOverrides(composeFile, files, "up", "-d", "--no-deps", "--force-recreate", "proxy")
 	if err != nil {
-		return EgressGeneration{}, ErrEgressGenerationUncertain
+		return EgressGeneration{}, nil, ErrEgressGenerationUncertain
 	}
 	if err := runEngine(ctx, eng, upArgs...); err != nil {
-		return EgressGeneration{}, ErrEgressGenerationUncertain
+		return EgressGeneration{}, nil, ErrEgressGenerationUncertain
 	}
-	if err := waitForProxyGeneration(ctx, eng, composeFile, files, generation); err != nil {
-		return EgressGeneration{}, ErrEgressGenerationUncertain
-	}
-	return generation, nil
+	return generation, files, nil
 }
 
 // EnsureEgressGeneration avoids a connection-dropping replacement when the

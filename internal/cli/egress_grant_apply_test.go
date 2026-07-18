@@ -15,6 +15,13 @@ import (
 	engsession "github.com/freakhill/safeslop/internal/engine/session"
 )
 
+func TestDefaultDependenciesExposeSeparateEgressApplyAndInspectEffects(t *testing.T) {
+	d := defaultDependencies()
+	if d.replaceEgressOverlay == nil || d.inspectEgress == nil || d.applyEgressOverlay == nil {
+		t.Fatal("default egress apply, inspect, and compatibility effects must all be available")
+	}
+}
+
 func installEgressSeams(t *testing.T,
 	apply func(context.Context, engsession.Session, []container.SessionGrant) error,
 	inspect func(context.Context, engsession.Session) (container.EgressGeneration, error),

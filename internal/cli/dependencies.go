@@ -43,6 +43,7 @@ type dependencies struct {
 	launchContainer         containerLauncher
 	reapDirectInvocation    func(runtimepkg.Engine, string) error
 	applyEgressOverlay      func(context.Context, engsession.Session, []container.SessionGrant) error
+	replaceEgressOverlay    func(context.Context, engsession.Session, []container.SessionGrant) error
 	inspectEgress           func(context.Context, engsession.Session) (container.EgressGeneration, error)
 	teardownEgress          func(engsession.Session) error
 	observeEgress           func(context.Context, engsession.Session) ([]container.EgressObservation, error)
@@ -120,6 +121,20 @@ func defaultDependencies() *dependencies {
 		}
 		return container.ReapByInvocation(context.Background(), eng, invocationID)
 	}
+	d.replaceEgressOverlay = func(ctx context.Context, sess engsession.Session, desired []container.SessionGrant) error {
+		stageDir, err := sessionStageDir(sess)
+		if err != nil {
+			return err
+		}
+		eng, err := d.engineForSession(sess)
+		if err != nil {
+			return err
+		}
+		_, err = container.ReplaceEgressGeneration(ctx, eng, filepath.Join(stageDir, "compose.yml"), stageDir, desired, sess.GrantRevision)
+		return err
+	}
+	// Compatibility callers retain ensure+ACK behavior until their authority
+	// decisions move to the protocol reducer's separate Apply/Inspect effects.
 	d.applyEgressOverlay = func(ctx context.Context, sess engsession.Session, desired []container.SessionGrant) error {
 		stageDir, err := sessionStageDir(sess)
 		if err != nil {
