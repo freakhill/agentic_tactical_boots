@@ -20,7 +20,7 @@ file transfer between host and sandboxed runtimes.
 
 - `safeslop validate` — validate a policy against the embedded schema.
 - `safeslop list` — list available profiles.
-- `safeslop catalog list [--bundles] --output json` — list curated package catalog entries/bundles for profile creation UIs; the bundle-list envelope includes `data.defaults` (agent -> default bundle) for UI inheritance.
+- `safeslop catalog list [--bundles] --output json` — list curated package catalog entries/bundles for profile creation UIs; every row has engine-owned `availability` (`ready`/`unavailable` plus a bounded reason), and the bundle envelope includes `data.defaults` (agent -> default bundle) for UI inheritance.
 - `safeslop catalog bump <pkg> --to V [--security]` — bump a pin: resolve all-arch digests, enforce the version policy (LAW-A/B/C/D + monotonic floor + soak), write `catalog.cue`+`catalog.json`, print a plan sheet. `--security` waives the soak window only, never a LAW.
 - `safeslop catalog propose-version <pkg>` — list upstream candidates newest-first with would-be digests + blast radius (read-only).
 - `safeslop catalog add <pkg> --kind K --version V [--sha256 arch=hex]...` — add a pinned entry (channel ban + full validate).
@@ -406,10 +406,11 @@ Only `container` + `network: deny` is enforceable; host and `network: allow`
 sessions are rejected. IP literals, private/link-local/metadata, broker/mint,
 wildcard, suffix, URL, and non-80/443 targets are non-grantable. Emacs labels
 container deny **Deny (progressive review)** without granting authority; its
-session detail shows a passive count and `v` opens operator review. There `a`
-allows now, `k` keeps denied, and `A` previews a hash/CUE delta before a separate
-explicit add. Agent traffic never triggers a modal, focuses a buffer, edits CUE,
-or changes authority.
+session detail shows a passive count and `v` opens operator review. A live
+container-deny terminal also shows `Egress: N denied (C-c C-v review)` and that
+shortcut opens the same explicit review. There `a` allows now, `k` keeps denied,
+and `A` previews a hash/CUE delta before a separate explicit add. Agent traffic
+never triggers a modal, focuses a buffer, edits CUE, or changes authority.
 
 ## Safety checklist
 

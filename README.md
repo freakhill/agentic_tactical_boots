@@ -66,7 +66,7 @@ safeslop doctor
 ```text
 safeslop validate [safeslop.cue]    check against the embedded schema
 safeslop list [safeslop.cue]        list profiles and resolved tiers
-safeslop catalog list [--bundles] --output json   curated package catalog for UIs (bundle JSON includes defaults)
+safeslop catalog list [--bundles] --output json   curated package catalog for UIs (defaults + build availability)
 safeslop catalog bump <pkg> --to V [--security]   bump a pin: resolve all-arch digests, enforce the policy, write a plan sheet
 safeslop catalog propose-version <pkg>            list upstream candidates + would-be digests + blast radius (read-only)
 safeslop catalog add <pkg> --kind K --version V   add a pinned entry (channel ban + full validate)
@@ -225,8 +225,13 @@ isolated and reject these commands. Observations are non-modal: agent traffic
 never opens a prompt, focuses a review buffer, edits CUE, or changes network
 authority. In Emacs, compose labels container deny as **Deny (progressive
 review)** (not an authorization); session detail shows a passive pending count
-and `v` opens review. There, `a` is Allow now, `k` is Keep denied, and `A` first
-shows the hash/CUE delta before a separate explicit durable add.
+and `v` opens review. Live container-deny terminals additionally show a value-free
+`Egress: N denied (C-c C-v review)` header/mode-line indicator that refreshes from
+read-only observations; `C-c C-v` is still an explicit operator action, never an
+agent-triggered prompt. In review, `a` is Allow now, `k` is Keep denied, and `A`
+first shows the hash/CUE delta before a separate explicit durable add. Deny-tier
+containers set both lowercase and uppercase proxy environment variables, so ordinary
+HTTP clients such as curl reach the proxy-observation boundary instead of raw DNS.
 
 `session status` and `session list` reconcile liveness: a session still marked
 `running` whose recorded process is gone — or whose PID now names a different
@@ -547,7 +552,9 @@ agent changes recompute default-package inheritance before preview. `L` means a 
 is included by its displayed source and cannot be partly toggled. `RET` toggles
 unlocked bundle/package rows while retaining the logical row and each showing
 window's scroll position; `g` refreshes catalog data with the same context
-preservation. An `Automatic agent bundle` control is the deliberate
+preservation. Every catalog row carries engine-owned build availability: unavailable
+rows remain visible with their bounded reason but cannot be newly selected, and a
+legacy unavailable draft must remove that row before preview. An `Automatic agent bundle` control is the deliberate
 all-or-nothing opt-out for an agent default: disabling it emits
 `--no-default-bundle`, retains explicit selections, and can leave the agent without
 its runtime so launch may fail. It does not relax the container, network, or

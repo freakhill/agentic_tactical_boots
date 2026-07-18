@@ -1,6 +1,6 @@
 # 0117 — Buildable profile composition and prominent progressive-egress review
 
-Status: approved for implementation
+Status: implemented and accepted
 
 SCOPE: make profile creation offer only buildable catalog selections with an engine-owned availability explanation; ensure conventional HTTP clients send deny-tier traffic through the inspected proxy; make denied egress prominently and continuously visible in a live Emacs terminal, with an explicit keyboard route to the existing review/Allow-now/Keep-denied flow.
 
@@ -55,7 +55,7 @@ The catalog composer renders selections whose resolved image cannot be built, th
   VERIFY:   `make test-emacs EMACS=$(command -v emacs)`
   EXPECTED: ERT proves eligible terminals render/update the count and shortcut, non-eligible terminals do not poll, callbacks never pop or mutate authority, `C-c C-v` opens review only on explicit keypress, and timers are cleaned up.
 
-- [ ] T5 — Synchronize operator contract and verify
+- [x] T5 — Synchronize operator contract and verify
   FILE:     `README.md`, `skills/agent-sandbox-ops/SKILL.md`, `specs/0117-profile-egress-ux.md`
   CHANGE:   Document unavailable composer selections, HTTP-client proxy behavior, terminal egress indicator/review shortcut, and the explicit non-modal grant rule. Tick every task only after its verification succeeds and set the spec status to complete only after final verification.
   VERIFY:   `git diff --check && make check && make build`
