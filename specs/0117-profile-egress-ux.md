@@ -37,7 +37,7 @@ The catalog composer renders selections whose resolved image cannot be built, th
   VERIFY:   `go test ./internal/engine/container ./internal/cli -run 'Recipe|Buildability|CatalogList' -count=1 -v`
   EXPECTED: Built selections (`personal`, `base-tools`, defaults) are ready; sentinel/unwired selections are unavailable with a stable safe reason; legacy JSON fields remain present.
 
-- [ ] T2 — Make the profile composer availability-aware
+- [x] T2 — Make the profile composer availability-aware
   FILE:     `emacs/safeslop-profiles.el`, `emacs/safeslop-profile-compose.el`, `emacs/test/safeslop-profiles-test.el`
   CHANGE:   Preserve catalog availability in the composer indexes and row state. Render every unavailable bundle/package with a prominent unavailable marker plus reason, show it in help, refuse a new selection locally, and allow an existing unavailable selection only to be removed. Reject preview before dispatch if an unavailable selection remains. Keep ordinary and default/inherited selection semantics, command argv, row/context preservation, and catalog-refresh behavior unchanged for ready selections.
   VERIFY:   `make test-emacs EMACS=$(command -v emacs)`

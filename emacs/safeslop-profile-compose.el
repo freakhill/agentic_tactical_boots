@@ -121,6 +121,20 @@ initial value (used by clone)."
   "Return catalog row NAME from KIND (`bundles' or `packages') in CATALOG."
   (cdr (assoc name (alist-get kind catalog))))
 
+(defun safeslop-profiles--availability-unavailable-p (availability)
+  "Return non-nil only for an engine-declared unavailable catalog AVAILABILITY."
+  (and (listp availability) (equal (alist-get 'state availability) "unavailable")))
+
+(defun safeslop-profiles--availability-reason (availability)
+  "Return the engine-authored bounded reason from unavailable AVAILABILITY."
+  (when (safeslop-profiles--availability-unavailable-p availability)
+    (let ((reason (alist-get 'reason availability)))
+      (and (stringp reason) reason))))
+
+(defun safeslop-profiles--row-availability (kind name catalog)
+  "Return catalog availability metadata for KIND/NAME, if present."
+  (alist-get 'availability (safeslop-profiles--catalog-row kind name catalog)))
+
 (defun safeslop-profiles--row-vector (row field)
   "Return ROW FIELD as a list, accepting JSON vectors."
   (append (or (alist-get field row) []) nil))
@@ -165,6 +179,10 @@ initial value (used by clone)."
     (dolist (pkg (alist-get 'packages catalog))
       (unless (assoc (car pkg) rows)
         (push (cons (car pkg) (list (cons 'source nil) (cons 'locked nil) (cons 'checked nil))) rows)))
+    (dolist (row rows)
+      (setcdr row (append (cdr row)
+                          (list (cons 'availability
+                                      (safeslop-profiles--row-availability 'packages (car row) catalog))))))
     (sort rows (lambda (a b) (string< (car a) (car b))))))
 
 (defun safeslop-profiles--bundle-rows (agent bundles no-default-bundle catalog)
@@ -176,7 +194,8 @@ initial value (used by clone)."
                      (is-default (and default (string= name default))))
                 (cons name (list (cons 'checked (or is-default (member name bundles)))
                                  (cons 'locked is-default)
-                                 (cons 'source (when is-default (format "default:%s" name)))))))
+                                 (cons 'source (when is-default (format "default:%s" name)))
+                                 (cons 'availability (alist-get 'availability (cdr bundle)))))))
             (alist-get 'bundles catalog))))
 
 (defun safeslop-profiles--bundle-suggestions (&optional directory)
@@ -234,14 +253,19 @@ initial value (used by clone)."
 (define-derived-mode safeslop-profiles-compose-mode special-mode "safeslop-profile-compose"
   "Major mode for composing a safeslop profile before save.")
 
-(defun safeslop-profiles-compose--insert-row (type name checked locked source)
-  "Insert one compose row and attach row metadata."
-  (let ((start (point)))
+(defun safeslop-profiles-compose--insert-row (type name checked locked source availability)
+  "Insert one compose row and attach row metadata.
+AVAILABILITY is engine-owned metadata; unavailable rows remain visible rather
+than silently disappearing from the reviewed catalog."
+  (let* ((start (point))
+         (reason (safeslop-profiles--availability-reason availability))
+         (detail (string-join (delq nil (list source
+                                               (when reason (concat "UNAVAILABLE: " reason)))) "; ")))
     (insert (if (eq type 'bundle)
                 (format "[%s] %s bundle %-18s %s\n"
-                        (if checked "x" " ") (if locked "L" " ") name (or source ""))
+                        (if checked "x" " ") (if locked "L" " ") name detail)
               (format "[%s] %s %-18s package %s\n"
-                      (if checked "x" " ") (if locked "L" " ") name (or source ""))))
+                      (if checked "x" " ") (if locked "L" " ") name detail)))
     (put-text-property start (point) 'safeslop-row (list (cons 'type type) (cons 'name name)))))
 
 (defun safeslop-profiles-compose--insert-default-bundle-control (name disabled)
@@ -295,12 +319,14 @@ initial value (used by clone)."
              (suggested (member name (alist-get 'suggestions state))))
         (safeslop-profiles-compose--insert-row
          'bundle name (alist-get 'checked (cdr bundle)) (alist-get 'locked (cdr bundle))
-         (string-join (delq nil (list source (when suggested "suggested"))) ", "))))
+         (string-join (delq nil (list source (when suggested "suggested"))) ", ")
+         (alist-get 'availability (cdr bundle)))))
     (insert "\nPackages:\n")
     (dolist (pkg (alist-get 'package-rows state))
       (safeslop-profiles-compose--insert-row
        'package (car pkg) (alist-get 'checked (cdr pkg))
-       (alist-get 'locked (cdr pkg)) (alist-get 'source (cdr pkg))))
+       (alist-get 'locked (cdr pkg)) (alist-get 'source (cdr pkg))
+       (alist-get 'availability (cdr pkg))))
     (goto-char (point-min))))
 
 (defun safeslop-profiles-compose--row-at-point ()
@@ -440,20 +466,34 @@ The engine remains the authoritative policy validator at dry-run/save time."
        (let ((bundle (assoc name (safeslop-profiles--bundle-rows
                                   (alist-get 'agent state) (alist-get 'bundles state)
                                   (alist-get 'no-default-bundle state) (alist-get 'catalog state)))))
-         (if (alist-get 'locked (cdr bundle))
-             (safeslop-profiles-compose--locked-message name bundle)
+         (cond
+          ((alist-get 'locked (cdr bundle))
+           (safeslop-profiles-compose--locked-message name bundle))
+          ((and (safeslop-profiles--availability-unavailable-p (alist-get 'availability (cdr bundle)))
+                (not (member name (alist-get 'bundles state))))
+           (message "safeslop: %s is unavailable: %s" name
+                    (or (safeslop-profiles--availability-reason (alist-get 'availability (cdr bundle)))
+                        "no reviewed image recipe")))
+          (t
            (let ((bundles (alist-get 'bundles state)))
              (setcdr (assoc 'bundles state)
                      (if (member name bundles) (remove name bundles) (cons name bundles)))
-             (setq changed t)))))
+             (setq changed t))))))
       ('package
        (let ((pkg (assoc name (alist-get 'package-rows state))))
-         (if (alist-get 'locked (cdr pkg))
-             (safeslop-profiles-compose--locked-message name pkg)
+         (cond
+          ((alist-get 'locked (cdr pkg))
+           (safeslop-profiles-compose--locked-message name pkg))
+          ((and (safeslop-profiles--availability-unavailable-p (alist-get 'availability (cdr pkg)))
+                (not (member name (alist-get 'packages state))))
+           (message "safeslop: %s is unavailable: %s" name
+                    (or (safeslop-profiles--availability-reason (alist-get 'availability (cdr pkg)))
+                        "no reviewed image recipe")))
+          (t
            (let ((packages (alist-get 'packages state)))
              (setcdr (assoc 'packages state)
                      (if (member name packages) (remove name packages) (cons name packages)))
-             (setq changed t)))))
+             (setq changed t))))))
       (_ (message "safeslop: no selectable row at point")))
     (when changed
       (setcdr (assoc 'package-rows state)
@@ -470,6 +510,8 @@ The engine remains the authoritative policy validator at dry-run/save time."
                    (when (alist-get 'requires pkg) (format "requires: %s" (safeslop-profiles--join (safeslop-profiles--row-vector pkg 'requires))))
                    (when (alist-get 'conflicts pkg) (format "conflicts: %s" (safeslop-profiles--join (safeslop-profiles--row-vector pkg 'conflicts))))
                    (when (alist-get 'runtimeEgress pkg) (format "runtime egress: %s" (safeslop-profiles--join (safeslop-profiles--row-vector pkg 'runtimeEgress))))
+                   (when-let* ((reason (safeslop-profiles--availability-reason (alist-get 'availability pkg))))
+                     (format "UNAVAILABLE: %s" reason))
                    (when (alist-get 'note pkg) (format "note: %s" (alist-get 'note pkg)))))
    "; "))
 
@@ -483,9 +525,13 @@ The engine remains the authoritative policy validator at dry-run/save time."
     (message "%s"
              (pcase type
                ('bundle (let ((bundle (safeslop-profiles--catalog-row 'bundles name catalog)))
-                          (format "%s: %s; packages: %s" name
-                                  (or (alist-get 'description bundle) "")
-                                  (safeslop-profiles--join (safeslop-profiles--row-vector bundle 'packages)))))
+                          (string-join
+                           (delq nil (list (format "%s: %s; packages: %s" name
+                                                    (or (alist-get 'description bundle) "")
+                                                    (safeslop-profiles--join (safeslop-profiles--row-vector bundle 'packages)))
+                                           (when-let* ((reason (safeslop-profiles--availability-reason (alist-get 'availability bundle))))
+                                             (format "UNAVAILABLE: %s" reason))))
+                           "; ")))
                ('package (safeslop-profiles--package-help
                           (safeslop-profiles--catalog-row 'packages name catalog)))
                ('default-bundle
@@ -536,6 +582,28 @@ The engine remains the authoritative policy validator at dry-run/save time."
   (interactive)
   (kill-buffer (current-buffer)))
 
+(defun safeslop-profiles-compose--unavailable-selections (state)
+  "Return selected unavailable catalog entries in STATE as value-free labels."
+  (let* ((catalog (alist-get 'catalog state))
+         (bundles (copy-sequence (or (alist-get 'bundles state) nil)))
+         (packages (copy-sequence (or (alist-get 'packages state) nil))))
+    (unless (alist-get 'no-default-bundle state)
+      (when-let* ((default (safeslop-profiles--lookup-default-bundle
+                            (alist-get 'agent state) catalog)))
+        (push default bundles)))
+    (delq nil
+          (append
+           (mapcar (lambda (name)
+                     (when-let* ((reason (safeslop-profiles--availability-reason
+                                          (safeslop-profiles--row-availability 'bundles name catalog))))
+                       (format "bundle %s: %s" name reason)))
+                   bundles)
+           (mapcar (lambda (name)
+                     (when-let* ((reason (safeslop-profiles--availability-reason
+                                          (safeslop-profiles--row-availability 'packages name catalog))))
+                       (format "package %s: %s" name reason)))
+                   packages)))))
+
 (defun safeslop-profiles--preview-text (data)
   "Render engine-authored dry-run DATA for confirmation."
   (let ((resolved (alist-get 'resolved data)))
@@ -567,7 +635,10 @@ The engine remains the authoritative policy validator at dry-run/save time."
   "Preview exact compose state with the engine, then write after explicit yes."
   (interactive)
   (let* ((state safeslop-profiles-compose--state)
+         (unavailable (safeslop-profiles-compose--unavailable-selections state))
          (args (safeslop-profiles--dry-run-args state)))
+    (when unavailable
+      (user-error "Remove unavailable selections before preview: %s" (string-join unavailable "; ")))
     (safeslop--call-json-async
      args
      (lambda (env)

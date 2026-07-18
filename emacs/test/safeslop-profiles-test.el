@@ -271,6 +271,74 @@
                  ((name . "ripgrep") (kind . "binary") (version . "14"))]))
   "Synthetic package catalog data for profile compose tests.")
 
+(ert-deftest safeslop-test-profiles-compose-unavailable-rows-stay-visible-and-cannot-be-selected ()
+  "Unavailable catalog entries are explained before a profile can include them."
+  (let* ((catalog (safeslop-profiles--catalog-indexes
+                   '((bundles . [((name . "web") (description . "Web")
+                                  (packages . ["bun"])
+                                  (availability . ((state . "unavailable")
+                                                   (reason . "bun has no reviewed artifact digest"))))]))
+                   '((packages . [((name . "bun") (kind . "binary") (version . "1")
+                                   (availability . ((state . "unavailable")
+                                                    (reason . "bun has no reviewed artifact digest"))))]))))
+         (state (safeslop-profiles--compose-state
+                 "review" "fish" "container" nil nil "deny" "." nil catalog))
+         feedback)
+    (with-temp-buffer
+      (safeslop-profiles-compose-mode)
+      (setq safeslop-profiles-compose--state state)
+      (safeslop-profiles-compose--render)
+      (should (string-match-p "UNAVAILABLE: bun has no reviewed artifact digest" (buffer-string)))
+      (goto-char (point-min))
+      (search-forward "bundle web")
+      (beginning-of-line)
+      (cl-letf (((symbol-function 'message)
+                 (lambda (format-string &rest args)
+                   (setq feedback (apply #'format format-string args)))))
+        (safeslop-profiles-compose-toggle))
+      (should-not (member "web" (alist-get 'bundles state)))
+      (should (string-match-p "unavailable" feedback)))))
+
+(ert-deftest safeslop-test-profiles-compose-removes-selected-unavailable-bundle ()
+  "A legacy unavailable selection remains removable from the compose draft."
+  (let* ((catalog (safeslop-profiles--catalog-indexes
+                   '((bundles . [((name . "web") (description . "Web")
+                                  (packages . ["bun"])
+                                  (availability . ((state . "unavailable")
+                                                   (reason . "bun has no reviewed artifact digest"))))]))
+                   '((packages . [((name . "bun") (kind . "binary") (version . "1")
+                                   (availability . ((state . "unavailable")
+                                                    (reason . "bun has no reviewed artifact digest"))))]))))
+         (state (safeslop-profiles--compose-state
+                 "review" "fish" "container" '("web") nil "deny" "." nil catalog)))
+    (with-temp-buffer
+      (safeslop-profiles-compose-mode)
+      (setq safeslop-profiles-compose--state state)
+      (safeslop-profiles-compose--render)
+      (goto-char (point-min))
+      (search-forward "bundle web")
+      (beginning-of-line)
+      (safeslop-profiles-compose-toggle)
+      (should-not (member "web" (alist-get 'bundles state))))))
+
+(ert-deftest safeslop-test-profiles-compose-preview-refuses-unavailable-selection ()
+  "Compose preview must not call the CLI while an unavailable selection remains."
+  (let* ((catalog (safeslop-profiles--catalog-indexes
+                   nil
+                   '((packages . [((name . "bun") (kind . "binary") (version . "1")
+                                   (availability . ((state . "unavailable")
+                                                    (reason . "bun has no reviewed artifact digest"))))]))))
+         (state (safeslop-profiles--compose-state
+                 "review" "fish" "container" nil '("bun") "deny" "." nil catalog))
+         called)
+    (with-temp-buffer
+      (safeslop-profiles-compose-mode)
+      (setq safeslop-profiles-compose--state state)
+      (cl-letf (((symbol-function 'safeslop--call-json-async)
+                 (lambda (&rest _) (setq called t))))
+        (should-error (safeslop-profiles-compose-preview-save) :type 'user-error))
+      (should-not called))))
+
 (ert-deftest safeslop-test-profiles-catalog-index-default-and-requires ()
   "Catalog helpers make inherited/default/required packages selected and locked."
   (let* ((catalog (safeslop-profiles--catalog-indexes
