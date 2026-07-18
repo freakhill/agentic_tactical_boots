@@ -386,6 +386,33 @@ func TestOwnerActionsPreservePersistedEgressRecoveryState(t *testing.T) {
 	})
 }
 
+func TestStopPreservesDecodableCreatedOwnerSignalCompatibility(t *testing.T) {
+	store := NewStore(t.TempDir())
+	sess, err := store.Create("fish", "host", t.TempDir(), testNow())
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, ok := ProcessStartToken(os.Getpid())
+	if !ok {
+		t.Skip("platform has no process-start token")
+	}
+	sess.PID, sess.ProcessToken = os.Getpid(), token
+	if err := store.Save(sess); err != nil {
+		t.Fatalf("seed stale Created owner: %v", err)
+	}
+	observed, signalled := 0, 0
+	signalTarget := 0
+	got, err := store.Stop(sess.ID, false, testNow(), func(Session) error { return nil },
+		func(target int) error { signalled++; signalTarget = target; return nil },
+		func(Session) bool { observed++; return true })
+	if err != nil {
+		t.Fatalf("stop stale Created owner: %v", err)
+	}
+	if observed != 1 || signalled != 1 || signalTarget != os.Getpid() || got.Status != StatusStopped {
+		t.Fatalf("stale Created stop = observed %d signalled %d target %d session %+v", observed, signalled, signalTarget, got)
+	}
+}
+
 func TestStopSignalsSupervisorGroupAndRemovesSocket(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir)
@@ -581,9 +608,9 @@ func TestReconcileStopsProcessTokenMismatch(t *testing.T) {
 	defer func() { processStartToken = old }()
 
 	sess := Session{ID: "sess-x", Status: StatusRunning, PID: 4242, ProcessToken: "old-token"}
-	got, changed := reconcile(sess, testNow(), ProcessAliveSession)
-	if !changed || got.Status != StatusStopped || got.PID != 0 {
-		t.Fatalf("token-mismatched session not reconciled to stopped: changed=%v got=%+v", changed, got)
+	got, changed, err := reconcile(sess, testNow(), ProcessAliveSession)
+	if err != nil || !changed || got.Status != StatusStopped || got.PID != 0 {
+		t.Fatalf("token-mismatched session not reconciled to stopped: changed=%v got=%+v err=%v", changed, got, err)
 	}
 }
 
@@ -598,7 +625,10 @@ func TestProcessAliveSessionFallsBackForLegacyEmptyToken(t *testing.T) {
 
 func TestReconcileMarksDeadRunningSessionStopped(t *testing.T) {
 	sess := Session{ID: "sess-x", Status: StatusRunning, PID: 4242}
-	got, changed := reconcile(sess, testNow(), func(Session) bool { return false })
+	got, changed, err := reconcile(sess, testNow(), func(Session) bool { return false })
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
 	if !changed {
 		t.Fatalf("dead running session should be reconciled")
 	}
@@ -618,7 +648,10 @@ func TestReconcileMarksDeadRunningSessionStopped(t *testing.T) {
 
 func TestReconcileLeavesLiveSessionRunning(t *testing.T) {
 	sess := Session{ID: "sess-x", Status: StatusRunning, PID: 4242}
-	got, changed := reconcile(sess, testNow(), func(Session) bool { return true })
+	got, changed, err := reconcile(sess, testNow(), func(Session) bool { return true })
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
 	if changed {
 		t.Fatalf("live running session should not be reconciled")
 	}
@@ -630,7 +663,10 @@ func TestReconcileLeavesLiveSessionRunning(t *testing.T) {
 func TestReconcileIsIdempotentOnStopped(t *testing.T) {
 	for _, st := range []string{StatusStopped, StatusCreated} {
 		sess := Session{ID: "sess-x", Status: st, PID: 0}
-		got, changed := reconcile(sess, testNow(), func(Session) bool { return false })
+		got, changed, err := reconcile(sess, testNow(), func(Session) bool { return false })
+		if err != nil {
+			t.Fatalf("reconcile %s: %v", st, err)
+		}
 		if changed {
 			t.Fatalf("%s session should not be reconciled", st)
 		}
@@ -696,6 +732,101 @@ func TestListReconciledCorrectsDeadSessions(t *testing.T) {
 	}
 	if byID[created.ID].Status != StatusCreated {
 		t.Fatalf("created session wrongly reconciled: %+v", byID[created.ID])
+	}
+}
+
+func TestTerminalizationPreservesDetachedCompatibilityBit(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		stop func(Store, string) (Session, error)
+	}{
+		{name: "Finish", stop: func(store Store, id string) (Session, error) {
+			return store.Finish(id, 0, "", testNow())
+		}},
+		{name: "Stop", stop: func(store Store, id string) (Session, error) {
+			return store.Stop(id, false, testNow(), func(Session) error { return nil }, func(int) error { return nil }, stopProcessAliveForTest)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := NewStore(t.TempDir())
+			sess, err := store.Create("pi", "host", t.TempDir(), testNow())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.MarkRunningDetached(sess.ID, 4242, testNow()); err != nil {
+				t.Fatal(err)
+			}
+			got, err := tc.stop(store, sess.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !got.Detached || got.Status != StatusStopped || got.PID != 0 || got.ProcessToken != "" {
+				t.Fatalf("terminal detached compatibility changed: %+v", got)
+			}
+		})
+	}
+}
+
+func TestTerminalCommitUncertainNeverReportsSuccess(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		run  func(Store, string) error
+	}{
+		{name: "Finish", run: func(store Store, id string) error {
+			_, err := store.Finish(id, 0, "", testNow())
+			return err
+		}},
+		{name: "Stop", run: func(store Store, id string) error {
+			_, err := store.Stop(id, false, testNow(), func(Session) error { return nil }, func(int) error { return nil }, func(Session) bool { return false })
+			return err
+		}},
+		{name: "Reconcile", run: func(store Store, id string) error {
+			_, err := store.GetReconciled(id, testNow(), func(Session) bool { return false })
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := NewStore(t.TempDir())
+			sess, err := store.Create("pi", "host", t.TempDir(), testNow())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.MarkRunning(sess.ID, 4242, testNow()); err != nil {
+				t.Fatal(err)
+			}
+			store.hooks = &atomicHooks{syncDir: func(string) error { return errors.New("injected directory sync failure") }}
+			if err := tc.run(store, sess.ID); !errors.Is(err, ErrCommitUncertain) {
+				t.Fatalf("terminal error = %v, want ErrCommitUncertain", err)
+			}
+			stored, err := store.Get(sess.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stored.Status != StatusStopped || stored.PID != 0 {
+				t.Fatalf("unknown terminal commit was assumed old: %+v", stored)
+			}
+		})
+	}
+}
+
+func TestFinishCanRefreshAlreadyStoppedDetachedRecord(t *testing.T) {
+	store := NewStore(t.TempDir())
+	sess, err := store.Create("pi", "host", t.TempDir(), testNow())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkRunningDetached(sess.ID, 4242, testNow()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Finish(sess.ID, 0, "first", testNow()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Finish(sess.ID, 1, "second", testNow().Add(time.Second))
+	if err != nil {
+		t.Fatalf("refresh stopped detached record: %v", err)
+	}
+	if !got.Detached || got.ExitCode == nil || *got.ExitCode != 1 || got.LastError != "second" {
+		t.Fatalf("refreshed terminal record = %+v", got)
 	}
 }
 

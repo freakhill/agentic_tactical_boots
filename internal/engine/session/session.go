@@ -320,21 +320,68 @@ func (s Store) ReleaseRunningClaim(id string, pid int, now time.Time) (Session, 
 }
 
 func (s Store) Finish(id string, exitCode int, lastErr string, now time.Time, failure ...Failure) (Session, error) {
-	return s.Update(id, func(sess Session) (Session, error) {
-		sess.Status = StatusStopped
-		sess.PID = 0
-		sess.ProcessToken = ""
-		sess.SetEgressRuntimeState(EgressRuntimeState{})
-		sess.ExitCode = &exitCode
-		sess.LastFailure = nil
-		if len(failure) > 0 {
-			sess.SetFailure(failure[0])
-		} else {
-			sess.LastError = lastErr
+	return s.WithLocked(id, func(tx *RecordTx) error {
+		sess := tx.Session()
+		adapter, state := NewProtocolAdapter(sess)
+		var candidate Session
+		var err error
+		switch sess.Status {
+		case StatusRunning:
+			if sess.PID > 0 {
+				state, err = adapter.OwnerActionState()
+				if err == nil {
+					var ok bool
+					state, ok = ReduceProtocol(state, ProtocolEvent{Action: ProtocolStopStart})
+					if !ok {
+						err = errors.New("session protocol finish transition is invalid")
+					}
+				}
+			} else {
+				state, err = adapter.BlockedTeardownState()
+				if err == nil {
+					var ok bool
+					state, ok = ReduceProtocol(state, ProtocolEvent{Action: ProtocolRequestTeardown})
+					if !ok {
+						err = errors.New("session protocol finish teardown request is invalid")
+					}
+				}
+			}
+			if err == nil {
+				candidate, err = completeTeardownProtocol(adapter, state)
+			}
+		case StatusCreated:
+			state, err = adapter.BlockedTeardownState()
+			if err == nil {
+				var ok bool
+				state, ok = ReduceProtocol(state, ProtocolEvent{Action: ProtocolRequestTeardown})
+				if !ok {
+					err = errors.New("session protocol finish teardown request is invalid")
+				} else {
+					candidate, err = completeTeardownProtocol(adapter, state)
+				}
+			}
+		case StatusStopped:
+			if _, ok := ReduceProtocol(state, ProtocolEvent{Action: ProtocolTerminalStutter}); !ok {
+				err = errors.New("session protocol finish terminal state is invalid")
+			} else {
+				candidate, err = adapter.TerminalCandidate(state)
+			}
+		default:
+			err = ErrCorruptRecord
 		}
-		sess.StoppedAt = now.UTC()
-		sess.UpdatedAt = now.UTC()
-		return sess, nil
+		if err != nil {
+			return err
+		}
+		candidate.ExitCode = &exitCode
+		candidate.LastFailure = nil
+		if len(failure) > 0 {
+			candidate.SetFailure(failure[0])
+		} else {
+			candidate.LastError = lastErr
+		}
+		candidate.StoppedAt = now.UTC()
+		candidate.UpdatedAt = now.UTC()
+		return tx.Commit(candidate)
 	})
 }
 
@@ -422,25 +469,51 @@ func ProcessAliveSession(sess Session) bool {
 	return ok && token == sess.ProcessToken
 }
 
-// reconcile corrects sess for liveness. In the coupled lifecycle the run wrapper
-// holds the agent for the whole run; in the detached lifecycle the recorded PID is
-// the supervisor/process-group leader. If that recorded process is no longer alive
-// — or its process-start token no longer matches, meaning the PID was reused — the
-// run ended without recording an exit (crash, SIGKILL, host sleep): report it as
-// stopped. Pure given isAlive; the bool reports whether sess changed so the caller
-// can persist exactly once.
-func reconcile(sess Session, now time.Time, isAlive func(Session) bool) (Session, bool) {
-	if sess.Status != StatusRunning || sess.PID <= 0 || isAlive(sess) {
-		return sess, false
+// reconcile starts and completes the pure dead-owner transition with no owned
+// callbacks. Store.GetReconciled uses the same start state but inserts its
+// reap/socket teardown effect before classifying TeardownProven.
+func reconcile(sess Session, now time.Time, isAlive func(Session) bool) (Session, bool, error) {
+	adapter, state, changed, err := startReconcileProtocol(sess, isAlive)
+	if err != nil || !changed {
+		return sess, changed, err
 	}
-	sess.Status = StatusStopped
-	sess.PID = 0
-	sess.ProcessToken = ""
-	sess.SetEgressRuntimeState(EgressRuntimeState{})
-	sess.LastError = "run process exited without recording status"
-	sess.StoppedAt = now.UTC()
-	sess.UpdatedAt = now.UTC()
-	return sess, true
+	candidate, err := completeReconcileProtocol(adapter, state, now)
+	return candidate, err == nil, err
+}
+
+func startReconcileProtocol(sess Session, isAlive func(Session) bool) (ProtocolAdapter, ProtocolState, bool, error) {
+	if sess.Status != StatusRunning || sess.PID <= 0 || isAlive(sess) {
+		return ProtocolAdapter{}, ProtocolState{}, false, nil
+	}
+	adapter, _ := NewProtocolAdapter(sess)
+	state, err := adapter.OwnerActionState()
+	if err != nil {
+		return ProtocolAdapter{}, ProtocolState{}, false, err
+	}
+	state, ok := ReduceProtocol(state, ProtocolEvent{Action: ProtocolStopStart})
+	if !ok || state.Effect != ProtocolTeardownEffect {
+		return ProtocolAdapter{}, ProtocolState{}, false, errors.New("session protocol reconcile transition is invalid")
+	}
+	return adapter, state, true, nil
+}
+
+func completeTeardownProtocol(adapter ProtocolAdapter, state ProtocolState) (Session, error) {
+	terminal, ok := ReduceProtocol(state, ProtocolEvent{Action: ProtocolTeardownAction, Outcome: ProtocolTeardownProven})
+	if !ok {
+		return Session{}, errors.New("session protocol proven teardown is invalid")
+	}
+	return adapter.Candidate(terminal)
+}
+
+func completeReconcileProtocol(adapter ProtocolAdapter, state ProtocolState, now time.Time) (Session, error) {
+	candidate, err := completeTeardownProtocol(adapter, state)
+	if err != nil {
+		return Session{}, err
+	}
+	candidate.LastError = "run process exited without recording status"
+	candidate.StoppedAt = now.UTC()
+	candidate.UpdatedAt = now.UTC()
+	return candidate, nil
 }
 
 // GetReconciled is Get plus a liveness pass: a session marked running whose PID
@@ -448,9 +521,9 @@ func reconcile(sess Session, now time.Time, isAlive func(Session) bool) (Session
 func (s Store) GetReconciled(id string, now time.Time, isAlive func(Session) bool, reap ...func(Session) error) (Session, error) {
 	return s.WithLocked(id, func(tx *RecordTx) error {
 		sess := tx.Session()
-		fixed, changed := reconcile(sess, now, isAlive)
-		if !changed {
-			return nil
+		adapter, state, changed, err := startReconcileProtocol(sess, isAlive)
+		if err != nil || !changed {
+			return err
 		}
 		for _, fn := range reap {
 			if fn != nil {
@@ -460,6 +533,10 @@ func (s Store) GetReconciled(id string, now time.Time, isAlive func(Session) boo
 			}
 		}
 		if err := s.removeSocketFiles(id); err != nil {
+			return err
+		}
+		fixed, err := completeReconcileProtocol(adapter, state, now)
+		if err != nil {
 			return err
 		}
 		return tx.Commit(fixed)
@@ -487,14 +564,22 @@ func (s Store) Stop(id string, revoke bool, now time.Time, revokeCredentials fun
 	return s.WithLocked(id, func(tx *RecordTx) error {
 		sess := tx.Session()
 		if sess.Status == StatusStopped {
+			adapter, state := NewProtocolAdapter(sess)
+			if _, ok := ReduceProtocol(state, ProtocolEvent{Action: ProtocolTerminalStutter}); !ok {
+				return errors.New("session protocol terminal stutter is invalid")
+			}
 			if revoke && !sess.CredentialsRevoked {
 				if err := revokeCredentials(sess); err != nil {
 					return err
 				}
-				sess.CredentialsRevoked = true
-				sess.RevokedAt = now.UTC()
-				sess.UpdatedAt = now.UTC()
-				return tx.Commit(sess)
+				candidate, err := adapter.Candidate(state)
+				if err != nil {
+					return err
+				}
+				candidate.CredentialsRevoked = true
+				candidate.RevokedAt = now.UTC()
+				candidate.UpdatedAt = now.UTC()
+				return tx.Commit(candidate)
 			}
 			return nil
 		}
@@ -505,21 +590,37 @@ func (s Store) Stop(id string, revoke bool, now time.Time, revokeCredentials fun
 			sess.CredentialsRevoked = true
 			sess.RevokedAt = now.UTC()
 		}
+
+		adapter, _ := NewProtocolAdapter(sess)
+		var teardown ProtocolState
 		if sess.PID != 0 && processAlive != nil && processAlive(sess) {
-			// Recheck the PID/process-start token while the record lock is held,
-			// immediately before signalling. The command's earlier reconcile check
-			// cannot authorize a PID that exited and was reused before Stop acquired
-			// this lock. A nil verifier fails closed and never signals.
-			//
-			// A detached supervisor leads its own process group (specs/0051 D4): signal
-			// the group (negative PID) so the boundary process tree is reached, not just
-			// the supervisor. A coupled run keeps the bare-PID signal.
+			// The immediate PID/process-token observation above is the only signal
+			// evidence. Reduce runs next, with no intervening callback or I/O.
+			state, err := adapter.SignalAuthorizationState()
+			if err != nil {
+				return err
+			}
+			var ok bool
+			teardown, ok = ReduceProtocol(state, ProtocolEvent{Action: ProtocolStopStart})
+			if !ok || teardown.Effect != ProtocolTeardownEffect {
+				return errors.New("session protocol signal authorization is invalid")
+			}
 			target := sess.PID
 			if sess.Detached {
 				target = -sess.PID
 			}
 			if err := killProcess(target); err != nil {
 				return err
+			}
+		} else {
+			state, err := adapter.BlockedTeardownState()
+			if err != nil {
+				return err
+			}
+			var ok bool
+			teardown, ok = ReduceProtocol(state, ProtocolEvent{Action: ProtocolRequestTeardown})
+			if !ok || teardown.Effect != ProtocolTeardownEffect {
+				return errors.New("session protocol teardown request is invalid")
 			}
 		}
 		if err := s.removeSocketFiles(id); err != nil {
@@ -532,13 +633,13 @@ func (s Store) Stop(id string, revoke bool, now time.Time, revokeCredentials fun
 				}
 			}
 		}
-		sess.Status = StatusStopped
-		sess.PID = 0
-		sess.ProcessToken = ""
-		sess.SetEgressRuntimeState(EgressRuntimeState{})
-		sess.StoppedAt = now.UTC()
-		sess.UpdatedAt = now.UTC()
-		return tx.Commit(sess)
+		candidate, err := completeTeardownProtocol(adapter, teardown)
+		if err != nil {
+			return err
+		}
+		candidate.StoppedAt = now.UTC()
+		candidate.UpdatedAt = now.UTC()
+		return tx.Commit(candidate)
 	})
 }
 

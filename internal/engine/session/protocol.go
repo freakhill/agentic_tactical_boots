@@ -894,6 +894,67 @@ func (a *ProtocolAdapter) OwnerActionState() (ProtocolState, error) {
 	return NormalizeProtocolState(state), nil
 }
 
+// SignalAuthorizationState preserves the pre-existing Stop behavior for a
+// decodable Created record carrying stale owner bytes. That compatibility state
+// is deliberately outside ValidRecordShape and the exact-owner theorem.
+func (a *ProtocolAdapter) SignalAuthorizationState() (ProtocolState, error) {
+	if a.original.Status == StatusRunning {
+		return a.OwnerActionState()
+	}
+	if a.original.Status != StatusCreated || a.original.PID <= 0 || !validEgressRuntimeState(a.original) {
+		return ProtocolState{}, fmt.Errorf("protocol signal authorization state is unavailable")
+	}
+	state, err := a.ClaimState()
+	if err != nil {
+		return ProtocolState{}, err
+	}
+	if a.original.egressTransition != nil {
+		a.mapConcreteTransition(&state, a.original)
+		if state.Health == ProtocolCorrupt {
+			return ProtocolState{}, fmt.Errorf("protocol signal recovery state is invalid")
+		}
+	}
+	if err := a.bindConcreteOwner(ProtocolOwnerA, a.original.PID, a.original.ProcessToken, false); err != nil {
+		return ProtocolState{}, err
+	}
+	state.Status, state.Owners, state.Detached = ProtocolRunning, ProtocolOwnerA, a.original.Detached
+	state.Health, state.Mode = ProtocolHealthy, ProtocolNormal
+	state.Operation, state.Effect, state.Result = ProtocolIdle, ProtocolNoEffect, ProtocolSuccess
+	return NormalizeProtocolState(state), nil
+}
+
+// BlockedTeardownState frames a Created, dead, or unverifiable owner before
+// RequestTeardown. It grants no signal authority and preserves durable egress
+// bindings until a later proven teardown clears only runtime state.
+func (a *ProtocolAdapter) BlockedTeardownState() (ProtocolState, error) {
+	if (a.original.Status != StatusCreated && a.original.Status != StatusRunning) || !validEgressRuntimeState(a.original) {
+		return ProtocolState{}, fmt.Errorf("protocol blocked teardown state is unavailable")
+	}
+	state := NormalizeProtocolState(a.baseline)
+	if a.original.Status == StatusCreated {
+		var err error
+		state, err = a.ClaimState()
+		if err != nil {
+			return ProtocolState{}, err
+		}
+	} else if a.original.PID > 0 {
+		var err error
+		state, err = a.OwnerActionState()
+		if err != nil {
+			return ProtocolState{}, err
+		}
+	}
+	if a.original.egressTransition != nil && state.Direction == ProtocolNoDirection {
+		a.mapConcreteTransition(&state, a.original)
+		if state.Health == ProtocolCorrupt {
+			return ProtocolState{}, fmt.Errorf("protocol blocked teardown recovery state is invalid")
+		}
+	}
+	state.Health, state.Mode = ProtocolStale, ProtocolBlocked
+	state.Operation, state.Effect, state.Result = ProtocolRecover, ProtocolNoEffect, ProtocolFailure
+	return NormalizeProtocolState(state), nil
+}
+
 // LegacyRunningState is an explicit compatibility projection for records with
 // no process token. The caller must still perform the historical PID liveness
 // effect; this state is outside the exact-token theorem.
@@ -1070,8 +1131,28 @@ func (a ProtocolAdapter) EffectCandidate(state ProtocolState) (Session, error) {
 // Candidate projects modeled durable fields back onto the original Session and
 // leaves every out-of-model field byte-for-byte framed for the effect driver.
 func (a ProtocolAdapter) Candidate(state ProtocolState) (Session, error) {
+	return a.projectCandidate(state, true)
+}
+
+// TerminalCandidate re-applies terminal projection after TerminalStutter. It is
+// used by Finish to preserve idempotent lifecycle state while clearing the same
+// internal runtime fields that Finish historically cleared.
+func (a ProtocolAdapter) TerminalCandidate(state ProtocolState) (Session, error) {
 	state = NormalizeProtocolState(state)
-	if state == a.baseline {
+	if state.Status != ProtocolStopped {
+		return Session{}, fmt.Errorf("protocol terminal candidate requires Stopped")
+	}
+	state.Owners, state.Detached, state.RuntimeAuthority = 0, false, 0
+	state.RuntimeGeneration, state.InspectedGeneration = protocolNoGeneration(), protocolNoGeneration()
+	state.Health, state.Mode = ProtocolHealthy, ProtocolTerminal
+	state.Operation, state.Effect, state.Result = ProtocolIdle, ProtocolNoEffect, ProtocolFailure
+	state.PendingAuthority, state.PendingRevision, state.Direction = 0, 0, ProtocolNoDirection
+	return a.projectCandidate(state, false)
+}
+
+func (a ProtocolAdapter) projectCandidate(state ProtocolState, preserveBaseline bool) (Session, error) {
+	state = NormalizeProtocolState(state)
+	if preserveBaseline && state == a.baseline {
 		return a.original, nil
 	}
 	if !protocolStateInDomain(ProtocolBounds{}, state) {
@@ -1108,7 +1189,10 @@ func (a ProtocolAdapter) Candidate(state ProtocolState) (Session, error) {
 		if state.Owners != 0 || state.Detached {
 			return Session{}, fmt.Errorf("protocol stopped candidate has an owner")
 		}
-		candidate.Status, candidate.PID, candidate.ProcessToken, candidate.Detached = StatusStopped, 0, "", false
+		// Detached is a historical concrete signal-routing byte. Terminal
+		// protocol state normalizes it away, while existing persisted behavior
+		// retains the byte after PID/token authority is cleared.
+		candidate.Status, candidate.PID, candidate.ProcessToken, candidate.Detached = StatusStopped, 0, "", a.original.Detached
 	default:
 		return Session{}, fmt.Errorf("protocol candidate status is invalid")
 	}

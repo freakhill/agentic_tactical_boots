@@ -528,7 +528,6 @@ var protocolMutationCalls = map[string]string{
 	"withEgressUncertaintyFailure":        "failure",
 	"stopForEgressUncertainty":            "lifecycle+owner+egress-runtime",
 	"recoverRunningSessionEgressWithDeps": "egress-authority+egress-runtime",
-	"reconcile":                           "lifecycle+owner+egress-runtime",
 	"Save":                                "protocol-state",
 	"Update":                              "protocol-state",
 	"WithLocked":                          "protocol-state",

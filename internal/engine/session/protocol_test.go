@@ -378,6 +378,37 @@ func TestProtocolExactHandoffAndReleaseRejectDetachedSource(t *testing.T) {
 	}
 }
 
+func TestProtocolAdapterBlockedTeardownStateReachesOnlyProvenTerminal(t *testing.T) {
+	for _, original := range []Session{
+		{ID: "created-teardown", Status: StatusCreated},
+		{ID: "stale-running-teardown", Status: StatusRunning},
+	} {
+		adapter, _ := NewProtocolAdapter(original)
+		state, err := adapter.BlockedTeardownState()
+		if err != nil {
+			t.Fatalf("%s blocked teardown state: %v", original.ID, err)
+		}
+		if state.Mode != ProtocolBlocked || state.Effect == ProtocolTeardownEffect {
+			t.Fatalf("%s blocked state = %+v", original.ID, state)
+		}
+		state, ok := ReduceProtocol(state, ProtocolEvent{Action: ProtocolRequestTeardown})
+		if !ok || state.Effect != ProtocolTeardownEffect {
+			t.Fatalf("%s request teardown = %+v, ok=%v", original.ID, state, ok)
+		}
+		terminal, ok := ReduceProtocol(state, ProtocolEvent{Action: ProtocolTeardownAction, Outcome: ProtocolTeardownProven})
+		if !ok {
+			t.Fatalf("%s proven teardown rejected", original.ID)
+		}
+		candidate, err := adapter.Candidate(terminal)
+		if err != nil {
+			t.Fatalf("%s terminal candidate: %v", original.ID, err)
+		}
+		if candidate.Status != StatusStopped || candidate.PID != 0 || candidate.EgressRuntimeState() != (EgressRuntimeState{}) {
+			t.Fatalf("%s terminal candidate = %+v", original.ID, candidate)
+		}
+	}
+}
+
 func TestProtocolAdapterBuildsCommitEffectCandidates(t *testing.T) {
 	created := Session{ID: "sess-claim", Environment: "container", Network: "deny", Status: StatusCreated}
 	claimAdapter, claimState := NewProtocolAdapter(created)
