@@ -284,7 +284,7 @@ func TestReconcileRemovesStaleSocket(t *testing.T) {
 	}
 }
 
-func TestStoreStopRevokesBeforeKillAndIsIdempotent(t *testing.T) {
+func TestSessionProtocolCharacterizationStoreStopEffectOrder(t *testing.T) {
 	store := NewStore(t.TempDir())
 	sess, err := store.Create("claude", "host", t.TempDir(), testNow())
 	if err != nil {
@@ -296,13 +296,15 @@ func TestStoreStopRevokesBeforeKillAndIsIdempotent(t *testing.T) {
 
 	var order []string
 	revoke := func(Session) error { order = append(order, "revoke"); return nil }
+	observe := func(Session) bool { order = append(order, "observe"); return true }
 	kill := func(int) error { order = append(order, "kill"); return nil }
-	reap := func(Session) error { order = append(order, "reap"); return nil }
-	stopped, err := store.Stop(sess.ID, true, testNow(), revoke, kill, stopProcessAliveForTest, reap)
+	reap1 := func(Session) error { order = append(order, "reap-1"); return nil }
+	reap2 := func(Session) error { order = append(order, "reap-2"); return nil }
+	stopped, err := store.Stop(sess.ID, true, testNow(), revoke, kill, observe, reap1, reap2)
 	if err != nil {
 		t.Fatalf("stop: %v", err)
 	}
-	if got, want := strings.Join(order, ","), "revoke,kill,reap"; got != want {
+	if got, want := strings.Join(order, ","), "revoke,observe,kill,reap-1,reap-2"; got != want {
 		t.Fatalf("order = %s, want %s", got, want)
 	}
 	if stopped.Status != StatusStopped || !stopped.CredentialsRevoked {
@@ -310,7 +312,7 @@ func TestStoreStopRevokesBeforeKillAndIsIdempotent(t *testing.T) {
 	}
 
 	order = nil
-	if _, err := store.Stop(sess.ID, true, testNow(), revoke, kill, stopProcessAliveForTest, reap); err != nil {
+	if _, err := store.Stop(sess.ID, true, testNow(), revoke, kill, observe, reap1, reap2); err != nil {
 		t.Fatalf("second stop: %v", err)
 	}
 	if len(order) != 0 {
@@ -544,7 +546,7 @@ func TestStoreStopCanRevokeAlreadyStoppedUnrevokedSession(t *testing.T) {
 	}
 }
 
-func TestRemoveDeletesNonRunningRecordAndRevokesLiveCredentials(t *testing.T) {
+func TestSessionProtocolCharacterizationRemoveEffectOrder(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(dir)
 	sess, err := store.Create("claude", "host", t.TempDir(), testNow())
@@ -555,21 +557,19 @@ func TestRemoveDeletesNonRunningRecordAndRevokesLiveCredentials(t *testing.T) {
 		t.Fatalf("finish: %v", err)
 	}
 
-	var revoked, reaped bool
+	var order []string
 	removed, err := store.Remove(sess.ID,
-		func(Session) error { revoked = true; return nil },
-		func(Session) error { reaped = true; return nil })
+		func(Session) error { order = append(order, "revoke"); return nil },
+		func(Session) error { order = append(order, "reap-1"); return nil },
+		func(Session) error { order = append(order, "reap-2"); return nil })
 	if err != nil {
 		t.Fatalf("remove: %v", err)
 	}
 	if removed.ID != sess.ID {
 		t.Fatalf("removed wrong session: %+v", removed)
 	}
-	if !revoked {
-		t.Fatal("Remove must revoke still-live credentials before deleting the record")
-	}
-	if !reaped {
-		t.Fatal("Remove must reap any residual boundary")
+	if got, want := strings.Join(order, ","), "revoke,reap-1,reap-2"; got != want {
+		t.Fatalf("order = %s, want %s", got, want)
 	}
 	if _, err := store.Get(sess.ID); err != ErrNotFound {
 		t.Fatalf("record still present after remove: %v", err)

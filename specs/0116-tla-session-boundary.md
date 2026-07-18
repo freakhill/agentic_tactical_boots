@@ -48,11 +48,56 @@ Baseline (2026-07-18, `ab08404`, clean main): focused session/container/CLI test
 
 ## Wave 1 — preserve current semantics
 
-- [ ] Freeze stable-boundary characterization and mutation inventory
+- [x] Freeze stable-boundary characterization and mutation inventory
   FILE:     `specs/0116-tla-session-boundary.md`; focused additions only to `internal/engine/session/*_test.go`, `internal/engine/container/*_test.go`, `internal/cli/*_test.go`; new temporary/read-only inventory helper under `internal/engine/session` test code if needed
   CHANGE:   Record exact focused test names/count and a complete sorted inventory of non-test writes/calls affecting `Session.Status`, owner identity, detached ownership, egress grants/revision, applied generation, and persisted transition across all `internal/`. Give new characterization tests one stable `TestSessionProtocolCharacterization*` prefix and assert the enumerated count so later focused commands cannot silently omit them. Add characterization only where current old/new/unknown commit, stale/decode shape, widen/narrow fault, recovery, teardown, claim/handoff/release/signal, exact Stop/Remove callback order, or value-free/public behavior lacks a stable assertion. Do not edit production semantics. If expected behavior is ambiguous, stop and amend the decision rather than choosing one.
   VERIFY:   `git diff --check && go test ./internal/engine/session ./internal/engine/container ./internal/cli -run 'Session|Store|Atomic|Concurrent|Egress|Grant|Revoke|Transition|Generation|Uncertain|Detach|Supervise|Claim|Handoff' -count=1 && go test -race ./internal/engine/session ./internal/cli -run 'Session|Store|Concurrent|Egress|Transition|Claim|Handoff' -count=1 && make check && make build`
   EXPECTED: Baseline behavior and model-owned mutation sites are explicit and reproducible; all pre-existing gates remain green; production files are unchanged.
+
+  TASK 1 EVIDENCE: The focused selection contains 208 existing tests; the exact new stable characterization set contains 2 tests: `TestSessionProtocolCharacterizationStoreStopEffectOrder` and `TestSessionProtocolCharacterizationRemoveEffectOrder`. Existing focused tests already pin stale/decode rejection, old/new/commit-uncertain persistence, widen/narrow recovery, uncertainty blocking, claim/handoff/release/signal identity, generation ACK, teardown, and value-free contracts. The two renamed-and-strengthened tests close the missing exact callback-order assertions without adding a duplicate. Exact pre-reducer mutation/call inventory, sorted by path then function (`state` includes the fixed uncertainty marker):
+
+  ```text
+  internal/cli/session.go|clearNarrowTransition|authority+applied-generation+transition|commit restored durable candidate
+  internal/cli/session.go|cmdSessionListWithDeps|lifecycle+owner|call ListReconciled
+  internal/cli/session.go|cmdSessionRunWithDeps|lifecycle+owner|call MarkRunning
+  internal/cli/session.go|cmdSessionStatusWithDeps|lifecycle+owner|call GetReconciled
+  internal/cli/session.go|cmdSessionStopWithDeps|lifecycle+owner|call GetReconciled then Stop
+  internal/cli/session.go|commitEgressFailureState|state|commit bounded uncertainty marker
+  internal/cli/session.go|commitRecoveredGeneration|applied-generation+transition|commit cleared transition
+  internal/cli/session.go|copySessionAuthority|egress-grants+grant-revision|direct write
+  internal/cli/session.go|egressSessionWithDeps|authority+applied-generation+transition|call running recovery under record lock
+  internal/cli/session.go|failClosedEgressWithDeps|lifecycle+owner+authority+state|construct and commit teardown/uncertainty result
+  internal/cli/session.go|finishSessionRun|lifecycle+owner|call Finish
+  internal/cli/session.go|grantSessionEgressWithDeps|authority+applied-generation+transition|call AppendGrant and commit pending/final candidates
+  internal/cli/session.go|recoverRunningSessionEgressWithDeps|authority+applied-generation+transition|direct candidate writes and recovery commits
+  internal/cli/session.go|revokeSessionEgressWithDeps|authority+applied-generation+transition|call RevokeGrant and commit pending/final candidates
+  internal/cli/session.go|runDetachWithDeps|lifecycle+owner|call MarkRunning/ReleaseRunningClaim/Finish
+  internal/cli/session.go|stopForEgressUncertainty|lifecycle+owner+applied-generation+transition|direct write
+  internal/cli/session.go|withAppliedGeneration|applied-generation+transition|direct runtime-state write
+  internal/cli/session.go|withEgressUncertaintyFailure|state|write fixed blocked marker
+  internal/cli/session.go|withTransition|applied-generation+transition|direct runtime-state write
+  internal/cli/supervise.go|superviseWithDeps|lifecycle+owner|call HandoffRunningDetached/Finish
+  internal/engine/session/egress_grant.go|AppendGrant|egress-grants+grant-revision|direct write
+  internal/engine/session/egress_grant.go|RevokeGrant|egress-grants+grant-revision|direct write
+  internal/engine/session/egress_grant.go|SetEgressRuntimeState|applied-generation+transition|direct write
+  internal/engine/session/session.go|Finish|lifecycle+owner+applied-generation+transition|direct write and commit
+  internal/engine/session/session.go|GetReconciled|lifecycle+owner+applied-generation+transition|call reconcile and commit
+  internal/engine/session/session.go|HandoffRunningDetached|owner+detached|direct write and commit
+  internal/engine/session/session.go|ListReconciled|lifecycle+owner+applied-generation+transition|call GetReconciled
+  internal/engine/session/session.go|ReleaseRunningClaim|lifecycle+owner+detached|direct write and commit
+  internal/engine/session/session.go|SetFailure|state|direct failure-marker write
+  internal/engine/session/session.go|Stop|lifecycle+owner+applied-generation+transition|direct write and commit
+  internal/engine/session/session.go|markRunning|lifecycle+owner+detached|direct write and commit
+  internal/engine/session/session.go|reconcile|lifecycle+owner+applied-generation+transition|direct write
+  internal/engine/session/store.go|Create|lifecycle|construct created record
+  internal/engine/session/store.go|RecordTx.Commit|protocol state|generic locked persistence gateway
+  internal/engine/session/store.go|Save|protocol state|generic stale-checked persistence gateway
+  internal/engine/session/store.go|Update|protocol state|generic callback persistence gateway
+  internal/engine/session/store.go|WithLocked|protocol state|generic locked callback gateway
+  internal/engine/session/store.go|decodeRecord|protocol state|rehydrate public and private recovery state
+  internal/engine/session/store.go|encodeRecord|protocol state|encode public and private recovery state
+  internal/engine/session/store.go|writeLocked|protocol state|atomic old/new/uncertain commit boundary
+  ```
 
 ## Wave 2 — independent bounded safety model
 
