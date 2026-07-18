@@ -147,11 +147,13 @@ Baseline (2026-07-18, `ab08404`, clean main): focused session/container/CLI test
 
 ## Wave 4 — route lifecycle ownership through the reducer
 
-- [ ] Route claim, handoff, and release decisions through the production reducer
+- [x] Route claim, handoff, and release decisions through the production reducer
   FILE:     `internal/engine/session/{protocol.go,session.go,protocol_test.go,session_test.go}`, `internal/cli/{session.go,supervise.go,cli_detach_test.go,supervise_test.go}`, mutation allowlist
   CHANGE:   In three RED→GREEN substeps, preserve existing signatures/errors/timestamps and route atomic claim, exact detached parent→supervisor handoff, and exact failed-spawn release through `Reduce`; execute current Store/process effects and feed their classified outcomes back. A known-new claim goes directly `Created -> Running`; no persisted/transient lifecycle discriminator is invented. After each substep remove only its old mutation keys and rerun focused characterization plus graph equality before continuing.
   VERIFY:   `go test ./internal/engine/session ./internal/cli -run 'MarkRunning|LaunchClaim|ConcurrentRunDetach|CoupledSessionRun|Handoff|ReleaseRunning|Supervis' -count=1 -v && go test -race ./internal/engine/session ./internal/cli -run 'MarkRunning|Claim|Handoff|Release|ConcurrentRunDetach' -count=1 && make check-tla-session`
   EXPECTED: Concurrent coupled/detached launch still has one winner, stale owners cannot handoff/release, launch failure releases only its exact claim, public envelopes are unchanged, and TLA+/Go graphs remain equal.
+
+  TASK 7 EVIDENCE: Claim, handoff, and release now construct concrete candidates only through `ReduceProtocol` plus `ProtocolAdapter`; known-new claim still commits directly from Created to Running. Old/new/uncertain commit regressions, concurrent winner/refusal, exact stale-owner checks, detached signal-mode compatibility, tokenless signal-0 compatibility, and persisted egress-recovery framing all pass. The mutation baseline shrank by exactly the 14 former direct/generic keys for these three Store methods, from 133 entries/48 owners to 119 entries/45 owners. Focused, race, all model/mutant, graph-equality, and mutation gates exited 0 without CLI or public-envelope changes.
 
 - [ ] Route reconcile, stop/signal authorization, and terminal lifecycle decisions through the reducer
   FILE:     `internal/engine/session/{protocol.go,session.go,protocol_test.go,session_test.go}`, affected `internal/cli/*_test.go`, mutation allowlist

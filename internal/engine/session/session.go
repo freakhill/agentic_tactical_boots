@@ -194,25 +194,62 @@ func (s Store) markRunning(id string, pid int, detached bool, now time.Time) (Se
 	if pid <= 0 {
 		return Session{}, errors.New("session process identity is invalid")
 	}
-	return s.Update(id, func(sess Session) (Session, error) {
+	return s.WithLocked(id, func(tx *RecordTx) error {
+		sess := tx.Session()
 		switch sess.Status {
 		case StatusCreated:
 		case StatusRunning:
-			return Session{}, ErrSessionRunning
+			return ErrSessionRunning
 		default:
-			return Session{}, ErrSessionStopped
+			return ErrSessionStopped
 		}
-		sess.Status = StatusRunning
-		sess.PID = pid
-		sess.ProcessToken = ""
+		adapter, state := NewProtocolAdapter(sess)
+		var err error
+		state, err = adapter.ClaimState()
+		if err != nil {
+			return err
+		}
+		state, ok := ReduceProtocol(state, ProtocolEvent{Action: ProtocolClaimStart})
+		if !ok {
+			return errors.New("session protocol claim transition is invalid")
+		}
+		processToken := ""
 		if token, ok := ProcessStartToken(pid); ok {
-			sess.ProcessToken = token
+			processToken = token
 		}
-		sess.Detached = detached
-		sess.StartedAt = now.UTC()
-		sess.UpdatedAt = now.UTC()
-		return sess, nil
+		if err := adapter.BindClaimOwner(pid, processToken, detached); err != nil {
+			return err
+		}
+		candidate, err := adapter.EffectCandidate(state)
+		if err != nil {
+			return err
+		}
+		candidate.StartedAt = now.UTC()
+		candidate.UpdatedAt = now.UTC()
+		commitErr := tx.Commit(candidate)
+		if !reduceClaimCommitOutcome(state, commitErr) {
+			return errors.New("session protocol claim outcome is invalid")
+		}
+		return commitErr
 	})
+}
+
+func reduceClaimCommitOutcome(state ProtocolState, commitErr error) bool {
+	if commitErr == nil {
+		_, ok := ReduceProtocol(state, ProtocolEvent{Action: ProtocolClaimCommit, Outcome: ProtocolKnownNew})
+		return ok
+	}
+	if errors.Is(commitErr, ErrCommitUncertain) {
+		for _, truth := range []ProtocolTruth{ProtocolOld, ProtocolNew} {
+			next, ok := ReduceProtocol(state, ProtocolEvent{Action: ProtocolClaimCommit, Outcome: ProtocolCommitUnknown, Truth: truth})
+			if !ok || next.Health != ProtocolUncertain || next.Mode != ProtocolBlocked {
+				return false
+			}
+		}
+		return true
+	}
+	_, ok := ReduceProtocol(state, ProtocolEvent{Action: ProtocolClaimCommit, Outcome: ProtocolKnownOld})
+	return ok
 }
 
 // HandoffRunningDetached atomically replaces the issuing wrapper claim with the
@@ -221,35 +258,64 @@ func (s Store) HandoffRunningDetached(id string, parentPID, supervisorPID int, n
 	if parentPID <= 0 || supervisorPID <= 0 {
 		return Session{}, errors.New("session process identity is invalid")
 	}
-	return s.Update(id, func(sess Session) (Session, error) {
+	return s.WithLocked(id, func(tx *RecordTx) error {
+		sess := tx.Session()
 		if sess.Status != StatusRunning || sess.Detached || sess.PID != parentPID || !ProcessAliveSession(sess) {
-			return Session{}, ErrStaleRecord
+			return ErrStaleRecord
 		}
-		sess.PID = supervisorPID
-		sess.ProcessToken = ""
+		adapter, _ := NewProtocolAdapter(sess)
+		// ProcessAliveSession above supplies exact token evidence when present and
+		// the historical signal-0 observation otherwise. The latter remains
+		// explicitly outside the exact-token theorem.
+		state, err := adapter.OwnerActionState()
+		if err != nil {
+			return err
+		}
+		next, ok := ReduceProtocol(state, ProtocolEvent{Action: ProtocolHandoffExact})
+		if !ok {
+			return ErrStaleRecord
+		}
+		supervisorToken := ""
 		if token, ok := ProcessStartToken(supervisorPID); ok {
-			sess.ProcessToken = token
+			supervisorToken = token
 		}
-		sess.Detached = true
-		sess.UpdatedAt = now.UTC()
-		return sess, nil
+		if err := adapter.BindHandoffOwner(supervisorPID, supervisorToken); err != nil {
+			return err
+		}
+		candidate, err := adapter.Candidate(next)
+		if err != nil {
+			return err
+		}
+		candidate.UpdatedAt = now.UTC()
+		return tx.Commit(candidate)
 	})
 }
 
 // ReleaseRunningClaim returns a failed pre-supervisor claim to created only
 // when it still belongs to this exact live issuing process.
 func (s Store) ReleaseRunningClaim(id string, pid int, now time.Time) (Session, error) {
-	return s.Update(id, func(sess Session) (Session, error) {
+	return s.WithLocked(id, func(tx *RecordTx) error {
+		sess := tx.Session()
 		if sess.Status != StatusRunning || sess.Detached || sess.PID != pid || !ProcessAliveSession(sess) {
-			return Session{}, ErrStaleRecord
+			return ErrStaleRecord
 		}
-		sess.Status = StatusCreated
-		sess.PID = 0
-		sess.ProcessToken = ""
-		sess.Detached = false
-		sess.StartedAt = time.Time{}
-		sess.UpdatedAt = now.UTC()
-		return sess, nil
+		adapter, _ := NewProtocolAdapter(sess)
+		// ProcessAliveSession above retains the tokenless signal-0 compatibility
+		// lane without upgrading it to exact theorem evidence.
+		state, err := adapter.OwnerActionState()
+		if err != nil {
+			return err
+		}
+		next, ok := ReduceProtocol(state, ProtocolEvent{Action: ProtocolReleaseExact})
+		if !ok {
+			return ErrStaleRecord
+		}
+		candidate, err := adapter.Candidate(next)
+		if err != nil {
+			return err
+		}
+		candidate.UpdatedAt = now.UTC()
+		return tx.Commit(candidate)
 	})
 }
 

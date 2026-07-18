@@ -292,6 +292,92 @@ func TestProtocolAdapterBuildsLifecycleAndGenerationCandidates(t *testing.T) {
 	}
 }
 
+func TestProtocolAdapterClaimStatePreservesStaleDetachedAndTokenlessCompatibility(t *testing.T) {
+	original := Session{ID: "sess-claim-compat", Status: StatusCreated, PID: 99, ProcessToken: "stale", Detached: true}
+	adapter, mapped := NewProtocolAdapter(original)
+	if mapped.Mode != ProtocolBlocked {
+		t.Fatalf("stale baseline unexpectedly normal: %+v", mapped)
+	}
+	state, err := adapter.ClaimState()
+	if err != nil {
+		t.Fatalf("claim state: %v", err)
+	}
+	if state.Mode != ProtocolNormal || state.Status != ProtocolCreated || state.Owners != 0 || state.Detached {
+		t.Fatalf("claim state = %+v", state)
+	}
+	if err := adapter.BindClaimOwner(41, "", true); err != nil {
+		t.Fatalf("bind tokenless detached claim owner: %v", err)
+	}
+	state, ok := ReduceProtocol(state, ProtocolEvent{Action: ProtocolClaimStart})
+	if !ok {
+		t.Fatal("claim start rejected")
+	}
+	candidate, err := adapter.EffectCandidate(state)
+	if err != nil {
+		t.Fatalf("claim candidate: %v", err)
+	}
+	if candidate.Status != StatusRunning || candidate.PID != 41 || candidate.ProcessToken != "" || !candidate.Detached {
+		t.Fatalf("claim compatibility candidate = %+v", candidate)
+	}
+}
+
+func TestProtocolAdapterLegacyRunningStatePreservesLifecycleCompatibility(t *testing.T) {
+	original := Session{ID: "sess-owner-compat", Status: StatusRunning, PID: 41}
+	adapter, mapped := NewProtocolAdapter(original)
+	if mapped.Mode != ProtocolBlocked {
+		t.Fatalf("legacy baseline unexpectedly normal: %+v", mapped)
+	}
+	state, err := adapter.LegacyRunningState()
+	if err != nil {
+		t.Fatalf("legacy running state: %v", err)
+	}
+	if state.Mode != ProtocolNormal || state.Owners != ProtocolOwnerA {
+		t.Fatalf("legacy running state = %+v", state)
+	}
+	released, ok := ReduceProtocol(state, ProtocolEvent{Action: ProtocolReleaseExact})
+	if !ok {
+		t.Fatal("legacy compatibility release rejected")
+	}
+	candidate, err := adapter.Candidate(released)
+	if err != nil {
+		t.Fatalf("legacy release candidate: %v", err)
+	}
+	if candidate.Status != StatusCreated || candidate.PID != 0 || candidate.ProcessToken != "" {
+		t.Fatalf("legacy release candidate = %+v", candidate)
+	}
+
+	adapter, _ = NewProtocolAdapter(original)
+	state, err = adapter.LegacyRunningState()
+	if err != nil {
+		t.Fatalf("legacy handoff state: %v", err)
+	}
+	if err := adapter.BindHandoffOwner(52, ""); err != nil {
+		t.Fatalf("bind tokenless handoff owner: %v", err)
+	}
+	handedOff, ok := ReduceProtocol(state, ProtocolEvent{Action: ProtocolHandoffExact})
+	if !ok {
+		t.Fatal("legacy compatibility handoff rejected")
+	}
+	candidate, err = adapter.Candidate(handedOff)
+	if err != nil {
+		t.Fatalf("legacy handoff candidate: %v", err)
+	}
+	if candidate.PID != 52 || candidate.ProcessToken != "" || !candidate.Detached {
+		t.Fatalf("legacy handoff candidate = %+v", candidate)
+	}
+}
+
+func TestProtocolExactHandoffAndReleaseRejectDetachedSource(t *testing.T) {
+	state := runningProtocolState()
+	state.Detached = true
+	if _, ok := ReduceProtocol(state, ProtocolEvent{Action: ProtocolHandoffExact}); ok {
+		t.Fatal("handoff accepted an already-detached source")
+	}
+	if _, ok := ReduceProtocol(state, ProtocolEvent{Action: ProtocolReleaseExact}); ok {
+		t.Fatal("release accepted an already-detached source")
+	}
+}
+
 func TestProtocolAdapterBuildsCommitEffectCandidates(t *testing.T) {
 	created := Session{ID: "sess-claim", Environment: "container", Network: "deny", Status: StatusCreated}
 	claimAdapter, claimState := NewProtocolAdapter(created)

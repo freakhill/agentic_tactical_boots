@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -175,6 +176,44 @@ func TestMarkRunningIsAtomicSingleOwnerClaim(t *testing.T) {
 	}
 }
 
+func TestMarkRunningCommitUncertainNeverReportsSuccess(t *testing.T) {
+	store := NewStore(t.TempDir())
+	sess, err := store.Create("fish", "host", t.TempDir(), testNow())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.hooks = &atomicHooks{syncDir: func(string) error { return errors.New("injected directory sync failure") }}
+	if _, err := store.MarkRunning(sess.ID, 4242, testNow()); !errors.Is(err, ErrCommitUncertain) {
+		t.Fatalf("MarkRunning error = %v, want ErrCommitUncertain", err)
+	}
+	stored, err := store.Get(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != StatusRunning || stored.PID != 4242 {
+		t.Fatalf("unknown commit was assumed old: %+v", stored)
+	}
+}
+
+func TestMarkRunningOverwritesDecodableStaleCreatedOwnerShape(t *testing.T) {
+	store := NewStore(t.TempDir())
+	sess, err := store.Create("fish", "host", t.TempDir(), testNow())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.PID, sess.ProcessToken, sess.Detached = 99, "stale", true
+	if err := store.Save(sess); err != nil {
+		t.Fatalf("seed stale created shape: %v", err)
+	}
+	got, err := store.MarkRunningDetached(sess.ID, 4242, testNow())
+	if err != nil {
+		t.Fatalf("mark stale created shape: %v", err)
+	}
+	if got.Status != StatusRunning || got.PID != 4242 || !got.Detached {
+		t.Fatalf("stale created claim compatibility changed: %+v", got)
+	}
+}
+
 func TestDetachedHandoffRequiresExactLiveParentClaim(t *testing.T) {
 	store := NewStore(t.TempDir())
 	sess, err := store.Create("fish", "host", t.TempDir(), testNow())
@@ -202,6 +241,149 @@ func TestDetachedHandoffRequiresExactLiveParentClaim(t *testing.T) {
 	if !handedOff.Detached || handedOff.PID != parentPID || handedOff.ProcessToken == "" {
 		t.Fatalf("handoff = %+v", handedOff)
 	}
+}
+
+func TestHandoffLegacyTokenlessParentCompatibility(t *testing.T) {
+	store := NewStore(t.TempDir())
+	sess, err := store.Create("fish", "host", t.TempDir(), testNow())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.Status, sess.PID, sess.ProcessToken = StatusRunning, os.Getpid(), ""
+	if err := store.Save(sess); err != nil {
+		t.Fatalf("seed tokenless parent: %v", err)
+	}
+	got, err := store.HandoffRunningDetached(sess.ID, os.Getpid(), os.Getpid(), testNow())
+	if err != nil {
+		t.Fatalf("legacy handoff: %v", err)
+	}
+	if !got.Detached || got.PID != os.Getpid() {
+		t.Fatalf("legacy handoff = %+v", got)
+	}
+}
+
+func TestHandoffCommitUncertainNeverReportsSuccess(t *testing.T) {
+	store := NewStore(t.TempDir())
+	sess, err := store.Create("fish", "host", t.TempDir(), testNow())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkRunning(sess.ID, os.Getpid(), testNow()); err != nil {
+		t.Fatal(err)
+	}
+	store.hooks = &atomicHooks{syncDir: func(string) error { return errors.New("injected directory sync failure") }}
+	if _, err := store.HandoffRunningDetached(sess.ID, os.Getpid(), os.Getpid(), testNow()); !errors.Is(err, ErrCommitUncertain) {
+		t.Fatalf("handoff error = %v, want ErrCommitUncertain", err)
+	}
+	stored, err := store.Get(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !stored.Detached || stored.PID != os.Getpid() {
+		t.Fatalf("unknown handoff commit was assumed old: %+v", stored)
+	}
+}
+
+func TestReleaseLegacyTokenlessClaimCompatibility(t *testing.T) {
+	store := NewStore(t.TempDir())
+	sess, err := store.Create("fish", "host", t.TempDir(), testNow())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.Status, sess.PID, sess.ProcessToken = StatusRunning, os.Getpid(), ""
+	sess.StartedAt = testNow()
+	if err := store.Save(sess); err != nil {
+		t.Fatalf("seed tokenless claim: %v", err)
+	}
+	got, err := store.ReleaseRunningClaim(sess.ID, os.Getpid(), testNow())
+	if err != nil {
+		t.Fatalf("legacy release: %v", err)
+	}
+	if got.Status != StatusCreated || got.PID != 0 || got.ProcessToken != "" || !got.StartedAt.IsZero() {
+		t.Fatalf("legacy release = %+v", got)
+	}
+}
+
+func TestReleaseCommitUncertainNeverReportsSuccess(t *testing.T) {
+	store := NewStore(t.TempDir())
+	sess, err := store.Create("fish", "host", t.TempDir(), testNow())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkRunning(sess.ID, os.Getpid(), testNow()); err != nil {
+		t.Fatal(err)
+	}
+	store.hooks = &atomicHooks{syncDir: func(string) error { return errors.New("injected directory sync failure") }}
+	if _, err := store.ReleaseRunningClaim(sess.ID, os.Getpid(), testNow()); !errors.Is(err, ErrCommitUncertain) {
+		t.Fatalf("release error = %v, want ErrCommitUncertain", err)
+	}
+	stored, err := store.Get(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != StatusCreated || stored.PID != 0 {
+		t.Fatalf("unknown release commit was assumed old: %+v", stored)
+	}
+}
+
+func TestOwnerActionsPreservePersistedEgressRecoveryState(t *testing.T) {
+	seed := func(t *testing.T) (Store, Session, EgressRuntimeState) {
+		t.Helper()
+		store := NewStore(t.TempDir())
+		sess, err := store.Create("fish", "container", t.TempDir(), testNow())
+		if err != nil {
+			t.Fatal(err)
+		}
+		sess, err = store.MarkRunning(sess.ID, os.Getpid(), testNow())
+		if err != nil {
+			t.Fatal(err)
+		}
+		oldGeneration, ok := canonicalEgressGeneration(sess, nil, 0)
+		if !ok {
+			t.Fatal("build old generation")
+		}
+		grant := EgressGrant{ID: "g-000001", Host: "api.example.com", Port: 443, Source: "operator", CreatedAt: testNow()}
+		sess.EgressGrants, sess.GrantRevision = []EgressGrant{grant}, 1
+		newGeneration, ok := canonicalEgressGeneration(sess, sess.EgressGrants, sess.GrantRevision)
+		if !ok {
+			t.Fatal("build new generation")
+		}
+		sess.SetEgressRuntimeState(EgressRuntimeState{
+			AppliedRevision: oldGeneration.Revision,
+			AppliedHash:     oldGeneration.Hash,
+			Transition: &EgressTransition{
+				Direction: EgressDirectionWiden, CandidateRevision: 1, CandidateHash: newGeneration.Hash,
+				CandidateGrants: []EgressGrant{grant},
+			},
+		})
+		sess.LastFailure = &Failure{Version: 1, Phase: "network", Code: "network_authority_uncertain", Required: true}
+		if err := store.Save(sess); err != nil {
+			t.Fatalf("seed egress recovery: %v", err)
+		}
+		return store, sess, sess.EgressRuntimeState()
+	}
+
+	t.Run("handoff", func(t *testing.T) {
+		store, sess, before := seed(t)
+		got, err := store.HandoffRunningDetached(sess.ID, os.Getpid(), os.Getpid(), testNow())
+		if err != nil {
+			t.Fatalf("handoff with recovery state: %v", err)
+		}
+		if !reflect.DeepEqual(got.EgressRuntimeState(), before) || got.LastFailure == nil || got.LastFailure.Code != "network_authority_uncertain" {
+			t.Fatalf("handoff changed recovery state: %+v", got)
+		}
+	})
+
+	t.Run("release", func(t *testing.T) {
+		store, sess, before := seed(t)
+		got, err := store.ReleaseRunningClaim(sess.ID, os.Getpid(), testNow())
+		if err != nil {
+			t.Fatalf("release with recovery state: %v", err)
+		}
+		if !reflect.DeepEqual(got.EgressRuntimeState(), before) || got.LastFailure == nil || got.LastFailure.Code != "network_authority_uncertain" {
+			t.Fatalf("release changed recovery state: %+v", got)
+		}
+	})
 }
 
 func TestStopSignalsSupervisorGroupAndRemovesSocket(t *testing.T) {

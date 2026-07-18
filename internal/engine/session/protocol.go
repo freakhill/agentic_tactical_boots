@@ -357,13 +357,13 @@ func ReduceProtocolWithin(bounds ProtocolBounds, state ProtocolState, event Prot
 		return resetProtocol(next, ProtocolFailure), true
 
 	case ProtocolHandoffExact:
-		if !protocolEmptyEvent(event) || state.Status != ProtocolRunning || state.Mode != ProtocolNormal || state.Operation != ProtocolIdle || state.Owners != ProtocolOwnerA {
+		if !protocolEmptyEvent(event) || state.Status != ProtocolRunning || state.Mode != ProtocolNormal || state.Operation != ProtocolIdle || state.Owners != ProtocolOwnerA || state.Detached {
 			return state, false
 		}
 		next.Owners, next.Detached = ProtocolOwnerB, true
 
 	case ProtocolReleaseExact:
-		if !protocolEmptyEvent(event) || state.Status != ProtocolRunning || state.Mode != ProtocolNormal || state.Operation != ProtocolIdle || state.Owners != ProtocolOwnerA {
+		if !protocolEmptyEvent(event) || state.Status != ProtocolRunning || state.Mode != ProtocolNormal || state.Operation != ProtocolIdle || state.Owners != ProtocolOwnerA || state.Detached {
 			return state, false
 		}
 		next.Status, next.Owners, next.Detached, next.Result = ProtocolCreated, 0, false, ProtocolFailure
@@ -714,10 +714,11 @@ type protocolConcreteGeneration struct {
 // timestamps, and metadata around the symbolic reducer state. Bindings let one
 // operation rebase arbitrary concrete revisions/authority into the finite model.
 type ProtocolAdapter struct {
-	original    Session
-	baseline    ProtocolState
-	owners      map[ProtocolOwner]protocolConcreteOwner
-	generations map[ProtocolGeneration]protocolConcreteGeneration
+	original      Session
+	baseline      ProtocolState
+	owners        map[ProtocolOwner]protocolConcreteOwner
+	generations   map[ProtocolGeneration]protocolConcreteGeneration
+	claimDetached *bool
 }
 
 func NewProtocolAdapter(sess Session) (ProtocolAdapter, ProtocolState) {
@@ -829,10 +830,88 @@ func (a *ProtocolAdapter) mapConcreteTransition(state *ProtocolState, sess Sessi
 	}
 }
 
+// ClaimState rebases a decodable Created record onto the claim operation while
+// framing stale owner bytes that the existing claim semantics overwrite.
+func (a *ProtocolAdapter) ClaimState() (ProtocolState, error) {
+	if a.original.Status != StatusCreated {
+		return ProtocolState{}, fmt.Errorf("protocol claim requires a created session")
+	}
+	state := NormalizeProtocolState(a.baseline)
+	state.Status, state.Owners, state.Detached = ProtocolCreated, 0, false
+	state.Health, state.Mode = ProtocolHealthy, ProtocolNormal
+	state.Operation, state.Effect = ProtocolIdle, ProtocolNoEffect
+	state.PendingAuthority, state.PendingRevision, state.Direction = 0, 0, ProtocolNoDirection
+	return state, nil
+}
+
+// BindClaimOwner preserves unsupported-platform tokenless and historical
+// detached claim projection without admitting either into exact-owner actions.
+func (a *ProtocolAdapter) BindClaimOwner(pid int, token string, detached bool) error {
+	if err := a.bindConcreteOwner(ProtocolOwnerA, pid, token, false); err != nil {
+		return err
+	}
+	a.claimDetached = new(bool)
+	*a.claimDetached = detached
+	return nil
+}
+
+// BindHandoffOwner records the supervisor identity after exact parent
+// authorization. A missing target token preserves unsupported-platform output,
+// but the resulting record remaps outside the exact-token theorem.
+func (a *ProtocolAdapter) BindHandoffOwner(pid int, token string) error {
+	binding := protocolConcreteOwner{pid: pid, token: token}
+	if current, ok := a.owners[ProtocolOwnerA]; ok && current == binding {
+		// Hermetic callers historically hand off to the same observed process
+		// while changing only detached signal mode. Move, rather than alias, the
+		// symbolic role so at most one binding still names the exact pair.
+		delete(a.owners, ProtocolOwnerA)
+	}
+	return a.bindConcreteOwner(ProtocolOwnerB, pid, token, false)
+}
+
+// OwnerActionState frames unrelated persisted egress recovery bytes while an
+// exact handoff/release decision runs. This preserves the historical fact that
+// owner-only lifecycle operations do not repair or reject egress state.
+func (a *ProtocolAdapter) OwnerActionState() (ProtocolState, error) {
+	if a.original.Status != StatusRunning || a.original.PID <= 0 || !validEgressRuntimeState(a.original) {
+		return ProtocolState{}, fmt.Errorf("protocol owner action state is unavailable")
+	}
+	state := NormalizeProtocolState(a.baseline)
+	if a.original.egressTransition != nil && state.Direction == ProtocolNoDirection {
+		a.mapConcreteTransition(&state, a.original)
+		if state.Health == ProtocolCorrupt {
+			return ProtocolState{}, fmt.Errorf("protocol owner recovery state is invalid")
+		}
+	}
+	if a.original.ProcessToken == "" {
+		if err := a.bindConcreteOwner(ProtocolOwnerA, a.original.PID, "", false); err != nil {
+			return ProtocolState{}, err
+		}
+	}
+	state.Status, state.Owners, state.Detached = ProtocolRunning, ProtocolOwnerA, a.original.Detached
+	state.Health, state.Mode = ProtocolHealthy, ProtocolNormal
+	state.Operation, state.Effect, state.Result = ProtocolIdle, ProtocolNoEffect, ProtocolSuccess
+	return NormalizeProtocolState(state), nil
+}
+
+// LegacyRunningState is an explicit compatibility projection for records with
+// no process token. The caller must still perform the historical PID liveness
+// effect; this state is outside the exact-token theorem.
+func (a *ProtocolAdapter) LegacyRunningState() (ProtocolState, error) {
+	if a.original.ProcessToken != "" {
+		return ProtocolState{}, fmt.Errorf("protocol legacy owner state is unavailable")
+	}
+	return a.OwnerActionState()
+}
+
 // BindOwner associates one symbolic exact owner with an opaque concrete
 // PID/process-token pair. Process-token verification remains an external effect.
 func (a *ProtocolAdapter) BindOwner(owner ProtocolOwner, pid int, token string) error {
-	if (owner != ProtocolOwnerA && owner != ProtocolOwnerB) || pid <= 0 || token == "" {
+	return a.bindConcreteOwner(owner, pid, token, true)
+}
+
+func (a *ProtocolAdapter) bindConcreteOwner(owner ProtocolOwner, pid int, token string, requireToken bool) error {
+	if (owner != ProtocolOwnerA && owner != ProtocolOwnerB) || pid <= 0 || (requireToken && token == "") {
 		return fmt.Errorf("protocol exact owner binding is invalid")
 	}
 	if a.owners == nil {
@@ -1020,7 +1099,11 @@ func (a ProtocolAdapter) Candidate(state ProtocolState) (Session, error) {
 		if !ok {
 			return Session{}, fmt.Errorf("protocol concrete owner is unbound")
 		}
-		candidate.Status, candidate.PID, candidate.ProcessToken, candidate.Detached = StatusRunning, owner.pid, owner.token, state.Detached
+		detached := state.Detached
+		if a.claimDetached != nil && a.original.Status == StatusCreated && state.Owners == ProtocolOwnerA {
+			detached = *a.claimDetached
+		}
+		candidate.Status, candidate.PID, candidate.ProcessToken, candidate.Detached = StatusRunning, owner.pid, owner.token, detached
 	case ProtocolStopped:
 		if state.Owners != 0 || state.Detached {
 			return Session{}, fmt.Errorf("protocol stopped candidate has an owner")
