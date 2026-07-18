@@ -43,7 +43,7 @@ The catalog composer renders selections whose resolved image cannot be built, th
   VERIFY:   `make test-emacs EMACS=$(command -v emacs)`
   EXPECTED: ERT proves unavailable rows remain legible but unselectable, selected legacy rows can be removed, preview sends no CLI command for an unavailable selection, and ready/default rows retain their existing behavior.
 
-- [ ] T3 — Route conventional HTTP clients through deny-tier proxy observation
+- [x] T3 — Route conventional HTTP clients through deny-tier proxy observation
   FILE:     `internal/engine/container/assets/compose.yml.tmpl`, `internal/engine/container/compose_test.go`, `internal/engine/container/container_images_live_test.go` (only if an existing opt-in Docker fixture can extend it), `README.md`, `skills/agent-sandbox-ops/SKILL.md`
   CHANGE:   Set lowercase `http_proxy`, `https_proxy`, and `no_proxy` alongside the existing uppercase variables to the same typed proxy values. Retain loopback DNS and the internal-only agent network. Add hermetic Compose-render assertions; extend an existing opt-in container gate only when it can demonstrate that HTTP curl sends an explicit deny through the proxy without leaking a live request.
   VERIFY:   `go test ./internal/engine/container -run 'Compose.*Proxy|DenyTier|DNS' -count=1 -v && make check-assets`

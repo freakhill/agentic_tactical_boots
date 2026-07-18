@@ -298,6 +298,18 @@ func TestComposeDenyTierPinsDNSLoopback(t *testing.T) {
 	if n := strings.Count(deny, "    dns:\n"); n != 1 {
 		t.Fatalf("deny-tier compose should render one agent DNS pin, got %d:\n%s", n, deny)
 	}
+	for key, value := range map[string]string{
+		"HTTP_PROXY":  "http://proxy:3128",
+		"HTTPS_PROXY": "http://proxy:3128",
+		"NO_PROXY":    "localhost,127.0.0.1,proxy",
+		"http_proxy":  "http://proxy:3128",
+		"https_proxy": "http://proxy:3128",
+		"no_proxy":    "localhost,127.0.0.1,proxy",
+	} {
+		if !strings.Contains(deny, key+": "+value) {
+			t.Fatalf("deny-tier compose missing %s proxy environment:\n%s", key, deny)
+		}
+	}
 
 	open, err := renderCompose(composeParams{RuntimeDir: "/r", Workspace: "/w", StageDir: "/r", OpenEgress: true})
 	if err != nil {
