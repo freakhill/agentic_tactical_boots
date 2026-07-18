@@ -91,6 +91,143 @@ func runRunningSessionWidenProtocol(d *dependencies, ctx context.Context, tx egr
 	return failClosedEgressWithDeps(d, tx, &current)
 }
 
+func recoverRunningSessionEgressProtocol(d *dependencies, ctx context.Context, tx egressRecordTransaction) error {
+	sess := tx.Session()
+	if sess.Status != engsession.StatusRunning {
+		return nil
+	}
+	if hasEgressUncertaintyFailure(sess) {
+		return failClosedEgressWithDeps(d, tx, nil)
+	}
+	concreteState := sess.EgressRuntimeState()
+	durableGeneration, err := sessionGeneration(sess)
+	if err != nil {
+		return failClosedEgressWithDeps(d, tx, nil)
+	}
+	adapter, _ := engsession.NewProtocolAdapter(sess)
+	if concreteState.Transition == nil {
+		if concreteState.AppliedRevision == durableGeneration.Revision && concreteState.AppliedHash == durableGeneration.Hash {
+			if current, inspectErr := d.inspectEgress(ctx, sess); inspectErr == nil && current == durableGeneration {
+				return nil
+			}
+		}
+		return recoverStableEgressGeneration(d, ctx, tx, adapter, sess)
+	}
+
+	active, recovery, err := adapter.EgressTransitionStates()
+	if err != nil {
+		return failClosedEgressWithDeps(d, tx, nil)
+	}
+	durableSymbol := protocolStateDurableGeneration(active)
+	current, inspectErr := d.inspectEgress(ctx, sess)
+	switch active.Direction {
+	case engsession.ProtocolWidenDirection:
+		if inspectErr == nil && adapter.GenerationEqual(durableSymbol, current) {
+			return commitRecoveredEgressState(d, tx, adapter, recovery)
+		}
+		return applyDurableRecoveryGeneration(d, ctx, tx, adapter, recovery)
+	case engsession.ProtocolNarrowDirection:
+		pendingSymbol := protocolStatePendingGeneration(active)
+		if inspectErr == nil && adapter.GenerationEqual(pendingSymbol, current) {
+			return commitRecoveredNarrowCandidate(d, tx, adapter, active)
+		}
+		if inspectErr == nil && adapter.GenerationEqual(durableSymbol, current) {
+			return commitRecoveredEgressState(d, tx, adapter, recovery)
+		}
+		return applyDurableRecoveryGeneration(d, ctx, tx, adapter, recovery)
+	default:
+		return failClosedEgressWithDeps(d, tx, nil)
+	}
+}
+
+func recoverStableEgressGeneration(d *dependencies, ctx context.Context, tx egressRecordTransaction, adapter engsession.ProtocolAdapter, sess engsession.Session) error {
+	symbol := engsession.ProtocolGeneration{Revision: 0, Valid: true}
+	verified, err := adapter.RebaseVerifiedGeneration(symbol)
+	if err != nil {
+		return failClosedEgressWithDeps(d, tx, nil)
+	}
+	application, err := d.beginEgressOverlayApply(ctx, sess, sessionEgressViews(sess))
+	if err != nil {
+		return failClosedEgressWithDeps(d, tx, nil)
+	}
+	inspected, inspectErr := application.Inspect(ctx)
+	if inspectErr != nil || !adapter.GenerationEqual(symbol, inspected) {
+		return failClosedEgressWithDeps(d, tx, nil)
+	}
+	candidate, err := adapter.CandidateFrom(verified, tx.Session())
+	if err != nil || tx.Commit(candidate) != nil {
+		return failClosedEgressWithDeps(d, tx, nil)
+	}
+	return nil
+}
+
+func applyDurableRecoveryGeneration(d *dependencies, ctx context.Context, tx egressRecordTransaction, adapter engsession.ProtocolAdapter, recovery engsession.ProtocolState) error {
+	durable, err := adapter.GenerationCandidate(protocolStateDurableGeneration(recovery))
+	if err != nil {
+		return failClosedEgressWithDeps(d, tx, nil)
+	}
+	// RecoverEgress is the model's correlated repair+positive-inspect action.
+	// The compatibility wrapper returns only after exact generation/hash ACK.
+	if err := d.applyEgressOverlay(ctx, durable, sessionEgressViews(durable)); err != nil {
+		return failClosedEgressWithDeps(d, tx, nil)
+	}
+	return commitRecoveredEgressState(d, tx, adapter, recovery)
+}
+
+func commitRecoveredEgressState(d *dependencies, tx egressRecordTransaction, adapter engsession.ProtocolAdapter, recovery engsession.ProtocolState) error {
+	stable, ok := engsession.ReduceProtocol(recovery, engsession.ProtocolEvent{Action: engsession.ProtocolRecoverEgress})
+	if !ok || stable.Effect != engsession.ProtocolNoEffect {
+		return failClosedEgressWithDeps(d, tx, nil)
+	}
+	candidate, err := adapter.CandidateFrom(stable, tx.Session())
+	if err != nil || tx.Commit(candidate) != nil {
+		return failClosedEgressWithDeps(d, tx, nil)
+	}
+	return nil
+}
+
+func commitRecoveredNarrowCandidate(d *dependencies, tx egressRecordTransaction, adapter engsession.ProtocolAdapter, active engsession.ProtocolState) error {
+	// Exact candidate inspection proves the pre-crash NarrowApply occurred. Replay
+	// that reachable edge before classifying its positive inspect and final commit.
+	state, ok := engsession.ReduceProtocol(active, engsession.ProtocolEvent{Action: engsession.ProtocolApplyAction, Outcome: engsession.ProtocolSucceeded})
+	if !ok {
+		return failClosedEgressWithDeps(d, tx, nil)
+	}
+	state, ok = engsession.ReduceProtocol(state, engsession.ProtocolEvent{Action: engsession.ProtocolInspectAction, Outcome: engsession.ProtocolMatched})
+	if !ok || state.Effect != engsession.ProtocolCommit {
+		return failClosedEgressWithDeps(d, tx, nil)
+	}
+	candidate, err := adapter.EffectCandidateFrom(state, tx.Session())
+	if err != nil {
+		return failClosedEgressWithDeps(d, tx, nil)
+	}
+	commitErr := tx.Commit(candidate)
+	switch {
+	case commitErr == nil:
+		if _, ok := engsession.ReduceProtocol(state, engsession.ProtocolEvent{Action: engsession.ProtocolNarrowFinalCommit, Outcome: engsession.ProtocolKnownNew}); !ok {
+			return failClosedEgressWithDeps(d, tx, nil)
+		}
+		return nil
+	case errors.Is(commitErr, engsession.ErrCommitUncertain):
+		if !protocolUnknownCommitBlocked(state, engsession.ProtocolNarrowFinalCommit) {
+			return fmt.Errorf("session protocol recovered narrow uncertain commit is invalid")
+		}
+	default:
+		if _, ok := engsession.ReduceProtocol(state, engsession.ProtocolEvent{Action: engsession.ProtocolNarrowFinalCommit, Outcome: engsession.ProtocolKnownOld}); !ok {
+			return fmt.Errorf("session protocol recovered narrow known-old commit is invalid")
+		}
+	}
+	return failClosedEgressWithDeps(d, tx, nil)
+}
+
+func protocolStateDurableGeneration(state engsession.ProtocolState) engsession.ProtocolGeneration {
+	return engsession.ProtocolGeneration{Authority: state.DurableAuthority, Revision: state.DurableRevision, Valid: true}
+}
+
+func protocolStatePendingGeneration(state engsession.ProtocolState) engsession.ProtocolGeneration {
+	return engsession.ProtocolGeneration{Authority: state.PendingAuthority, Revision: state.PendingRevision, Valid: true}
+}
+
 func runRunningSessionNarrowProtocol(d *dependencies, ctx context.Context, tx egressRecordTransaction, current, next engsession.Session) error {
 	adapter, _ := engsession.NewProtocolAdapter(current)
 	oldSymbol := engsession.ProtocolGeneration{Authority: engsession.ProtocolGrantSet(engsession.ProtocolGrantA), Revision: 0, Valid: true}

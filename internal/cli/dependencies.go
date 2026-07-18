@@ -199,6 +199,8 @@ func defaultDependencies() *dependencies {
 		}
 		return container.ReadDeniedEgressObservations(ctx, eng, filepath.Join(stageDir, "compose.yml"))
 	}
+	// Nil means the managed container/network boundary was synchronously reaped;
+	// SIGTERM delivery by itself is never the teardown proof.
 	d.teardownEgress = func(sess engsession.Session) error { return d.defaultEgressTeardown(sess) }
 	d.sessionSocket = func(sess engsession.Session) (string, bool) {
 		if sess.Status != engsession.StatusRunning {
@@ -230,6 +232,9 @@ func (d *dependencies) engineForSession(sess engsession.Session) (runtimepkg.Eng
 	return eng, nil
 }
 
+// defaultEgressTeardown proves network-boundary absence through the synchronous
+// Reap call below. The owner signal is best-effort shutdown initiation; a live
+// supervisor after reaping has no managed container/network authority to use.
 func (d *dependencies) defaultEgressTeardown(sess engsession.Session) error {
 	var firstErr error
 	if sess.PID != 0 && sess.PID != os.Getpid() && d.processAlive(sess) {

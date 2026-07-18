@@ -409,6 +409,47 @@ func TestProtocolAdapterBlockedTeardownStateReachesOnlyProvenTerminal(t *testing
 	}
 }
 
+func TestProtocolAdapterTerminalCandidateCanRestoreProvenAuthority(t *testing.T) {
+	now := time.Date(2026, 7, 18, 6, 30, 0, 0, time.UTC)
+	grant := EgressGrant{ID: "g-000001", Host: "api.example.com", Port: 443, Source: "operator", CreatedAt: now}
+	original := Session{ID: "sess-terminal-restore", Environment: "container", Network: "deny", Status: StatusRunning, PID: 41, EgressGrants: []EgressGrant{grant}, GrantRevision: 1}
+	generation, _ := canonicalEgressGeneration(original, original.EgressGrants, original.GrantRevision)
+	original.appliedEgressRevision, original.appliedEgressHash = generation.Revision, generation.Hash
+	adapter, _ := NewProtocolAdapter(original)
+	state, err := adapter.BlockedTeardownState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	requested, ok := ReduceProtocol(state, ProtocolEvent{Action: ProtocolRequestTeardown})
+	if !ok {
+		t.Fatal("request teardown rejected")
+	}
+	unknown, ok := ReduceProtocol(requested, ProtocolEvent{Action: ProtocolTeardownAction, Outcome: ProtocolTeardownUnknown})
+	if !ok {
+		t.Fatal("unknown teardown rejected")
+	}
+	blocked, err := adapter.TeardownUnknownCandidate(unknown, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blocked.Status != StatusRunning || blocked.LastFailure == nil || blocked.LastFailure.Code != "network_authority_uncertain" || blocked.EgressRuntimeState().AppliedHash != generation.Hash {
+		t.Fatalf("blocked teardown candidate=%+v runtime=%+v", blocked, blocked.EgressRuntimeState())
+	}
+	state, ok = ReduceProtocol(requested, ProtocolEvent{Action: ProtocolTeardownAction, Outcome: ProtocolTeardownProven})
+	if !ok {
+		t.Fatal("proven teardown rejected")
+	}
+	restore := original
+	restore.EgressGrants, restore.GrantRevision = nil, 0
+	candidate, err := adapter.TeardownProvenCandidate(state, &restore, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate.Status != StatusStopped || len(candidate.EgressGrants) != 0 || candidate.GrantRevision != 0 || candidate.LastFailure == nil || candidate.LastFailure.Code != "network_authority_uncertain" || candidate.EgressRuntimeState() != (EgressRuntimeState{}) {
+		t.Fatalf("terminal restore candidate=%+v runtime=%+v", candidate, candidate.EgressRuntimeState())
+	}
+}
+
 func TestProtocolAdapterBuildsCommitEffectCandidates(t *testing.T) {
 	created := Session{ID: "sess-claim", Environment: "container", Network: "deny", Status: StatusCreated}
 	claimAdapter, claimState := NewProtocolAdapter(created)
@@ -715,6 +756,56 @@ func TestProtocolAdapterRejectsMalformedStableRuntimeState(t *testing.T) {
 	_, state := NewProtocolAdapter(sess)
 	if state.Mode == ProtocolNormal || state.Health != ProtocolCorrupt {
 		t.Fatalf("malformed stable runtime entered normal protocol: %+v", state)
+	}
+}
+
+func TestProtocolAdapterBuildsPersistedEgressRecoveryStates(t *testing.T) {
+	now := time.Date(2026, 7, 18, 6, 0, 0, 0, time.UTC)
+	old := Session{ID: "sess-recover", Environment: "container", Network: "deny", Status: StatusRunning, PID: 41}
+	oldGeneration, _ := canonicalEgressGeneration(old, nil, 0)
+	grant := EgressGrant{ID: "g-000001", Host: "api.example.com", Port: 443, Source: "operator", CreatedAt: now}
+	widen := old
+	widen.EgressGrants, widen.GrantRevision = []EgressGrant{grant}, 1
+	newGeneration, _ := canonicalEgressGeneration(widen, widen.EgressGrants, widen.GrantRevision)
+	widen.appliedEgressRevision, widen.appliedEgressHash = oldGeneration.Revision, oldGeneration.Hash
+	widen.egressTransition = &EgressTransition{Direction: EgressDirectionWiden, CandidateRevision: 1, CandidateHash: newGeneration.Hash, CandidateGrants: []EgressGrant{grant}}
+
+	adapter, _ := NewProtocolAdapter(widen)
+	active, recovery, err := adapter.EgressTransitionStates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active.Operation != ProtocolWiden || active.Effect != ProtocolApply || recovery.Operation != ProtocolRecover || recovery.Effect != ProtocolInspect || recovery.Mode != ProtocolBlocked {
+		t.Fatalf("active=%+v recovery=%+v", active, recovery)
+	}
+	recovered, ok := ReduceProtocol(recovery, ProtocolEvent{Action: ProtocolRecoverEgress})
+	if !ok {
+		t.Fatal("persisted widen recovery rejected")
+	}
+	candidate, err := adapter.CandidateFrom(recovered, widen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state := candidate.EgressRuntimeState(); state.Transition != nil || state.AppliedHash != newGeneration.Hash {
+		t.Fatalf("recovered candidate=%+v runtime=%+v", candidate, state)
+	}
+}
+
+func TestProtocolAdapterVerifiedGenerationBootstrapsCanonicalAppliedState(t *testing.T) {
+	sess := Session{ID: "sess-bootstrap", Environment: "container", Network: "deny", Status: StatusRunning}
+	adapter, _ := NewProtocolAdapter(sess)
+	symbol := protocolGeneration(0, 0)
+	state, err := adapter.RebaseVerifiedGeneration(symbol)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := adapter.CandidateFrom(state, sess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	generation, _ := canonicalEgressGeneration(sess, nil, 0)
+	if runtime := candidate.EgressRuntimeState(); runtime.AppliedRevision != generation.Revision || runtime.AppliedHash != generation.Hash || runtime.Transition != nil {
+		t.Fatalf("verified bootstrap runtime=%+v want=%+v", runtime, generation)
 	}
 }
 

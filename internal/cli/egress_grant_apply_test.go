@@ -150,15 +150,17 @@ func installEgressSeams(t *testing.T,
 }
 
 type scriptedEgressRecordTx struct {
-	current engsession.Session
-	errors  []error
-	commits int
+	current    engsession.Session
+	errors     []error
+	commits    int
+	candidates []engsession.Session
 }
 
 func (tx *scriptedEgressRecordTx) Session() engsession.Session { return tx.current }
 
 func (tx *scriptedEgressRecordTx) Commit(candidate engsession.Session) error {
 	tx.commits++
+	tx.candidates = append(tx.candidates, candidate)
 	if len(tx.errors) > 0 {
 		err := tx.errors[0]
 		tx.errors = tx.errors[1:]
@@ -190,6 +192,11 @@ func TestFailClosedEgressRetriesFailureStateCommit(t *testing.T) {
 			}
 			if tx.commits != 2 || tx.current.Status != tc.wantStatus || tx.current.LastFailure == nil || tx.current.LastFailure.Code != "network_authority_uncertain" {
 				t.Fatalf("failure state was not retried: commits=%d session=%+v", tx.commits, tx.current)
+			}
+			for _, candidate := range tx.candidates {
+				if tc.teardownErr != nil && candidate.Status == engsession.StatusStopped {
+					t.Fatalf("unproven teardown produced terminal candidate: %+v", candidate)
+				}
 			}
 		})
 	}
@@ -707,6 +714,111 @@ func TestSessionRevokeApplyFailureRestoresOldDurableGeneration(t *testing.T) {
 	state := stored.EgressRuntimeState()
 	if calls != 2 || stored.Status != engsession.StatusRunning || len(stored.EgressGrants) != 1 || state.Transition != nil || state.AppliedHash != runtimeGeneration.Hash {
 		t.Fatalf("restore state = %+v runtime=%+v calls=%d", stored, runtimeGeneration, calls)
+	}
+}
+
+func TestPersistedNarrowRecoveryCorrelatesOldNewAndUnknownRuntime(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		observed      string
+		wantApplies   int
+		wantAuthority int
+	}{
+		{name: "candidate", observed: "candidate", wantAuthority: 0},
+		{name: "durable", observed: "durable", wantAuthority: 1},
+		{name: "unknown", observed: "unknown", wantApplies: 1, wantAuthority: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sess := engsession.Session{ID: "sess-recover-narrow", Environment: "container", Network: "deny", Status: engsession.StatusRunning, PID: 4242}
+			var grant engsession.EgressGrant
+			var err error
+			sess, grant, err = engsession.AppendGrant(sess, "example.com", 443, nowForTest(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			durableGeneration, err := sessionGeneration(sess)
+			if err != nil {
+				t.Fatal(err)
+			}
+			candidate, err := engsession.RevokeGrant(sess, grant.ID, nowForTest(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			candidateGeneration, err := sessionGeneration(candidate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sess.SetEgressRuntimeState(engsession.EgressRuntimeState{AppliedRevision: durableGeneration.Revision, AppliedHash: durableGeneration.Hash, Transition: &engsession.EgressTransition{
+				Direction: engsession.EgressDirectionNarrow, CandidateRevision: candidateGeneration.Revision, CandidateHash: candidateGeneration.Hash,
+			}})
+			tx := &scriptedEgressRecordTx{current: sess}
+			applyCalls, inspectCalls := 0, 0
+			runtimeGeneration := durableGeneration
+			switch tc.observed {
+			case "candidate":
+				runtimeGeneration = candidateGeneration
+			case "unknown":
+				runtimeGeneration = container.EgressGeneration{}
+			}
+			d := defaultDependencies()
+			d.inspectEgress = func(context.Context, engsession.Session) (container.EgressGeneration, error) {
+				inspectCalls++
+				if tc.observed == "unknown" && applyCalls == 0 {
+					return container.EgressGeneration{}, errors.New("runtime generation unavailable")
+				}
+				return runtimeGeneration, nil
+			}
+			d.applyEgressOverlay = func(_ context.Context, desired engsession.Session, _ []container.SessionGrant) error {
+				applyCalls++
+				var generationErr error
+				runtimeGeneration, generationErr = sessionGeneration(desired)
+				return generationErr
+			}
+			d.teardownEgress = func(engsession.Session) error { t.Fatal("correlated recovery tore down"); return nil }
+
+			if err := recoverRunningSessionEgressProtocol(d, context.Background(), tx); err != nil {
+				t.Fatal(err)
+			}
+			state := tx.current.EgressRuntimeState()
+			if applyCalls != tc.wantApplies || len(tx.current.EgressGrants) != tc.wantAuthority || state.Transition != nil || state.AppliedHash != runtimeGeneration.Hash {
+				t.Fatalf("recovery session=%+v state=%+v apply=%d inspect=%d runtime=%+v", tx.current, state, applyCalls, inspectCalls, runtimeGeneration)
+			}
+		})
+	}
+}
+
+func TestPersistedWidenRecoveryAcceptsAlreadyAppliedGeneration(t *testing.T) {
+	old := engsession.Session{ID: "sess-recover-widen", Environment: "container", Network: "deny", Status: engsession.StatusRunning, PID: 4242}
+	oldGeneration, err := sessionGeneration(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, _, err := engsession.AppendGrant(old, "example.com", 443, nowForTest(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	newGeneration, err := sessionGeneration(sess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.SetEgressRuntimeState(engsession.EgressRuntimeState{AppliedRevision: oldGeneration.Revision, AppliedHash: oldGeneration.Hash, Transition: &engsession.EgressTransition{
+		Direction: engsession.EgressDirectionWiden, CandidateRevision: newGeneration.Revision, CandidateHash: newGeneration.Hash, CandidateGrants: sess.EgressGrants,
+	}})
+	tx := &scriptedEgressRecordTx{current: sess}
+	d := defaultDependencies()
+	d.inspectEgress = func(context.Context, engsession.Session) (container.EgressGeneration, error) {
+		return newGeneration, nil
+	}
+	d.beginEgressOverlayApply = func(context.Context, engsession.Session, []container.SessionGrant) (egressApplyEffect, error) {
+		t.Fatal("already-applied widen must not replace runtime")
+		return egressApplyEffect{}, nil
+	}
+	d.teardownEgress = func(engsession.Session) error { t.Fatal("already-applied widen tore down"); return nil }
+	if err := recoverRunningSessionEgressProtocol(d, context.Background(), tx); err != nil {
+		t.Fatal(err)
+	}
+	if state := tx.current.EgressRuntimeState(); state.Transition != nil || state.AppliedHash != newGeneration.Hash || len(tx.current.EgressGrants) != 1 {
+		t.Fatalf("recovered widen session=%+v state=%+v", tx.current, state)
 	}
 }
 

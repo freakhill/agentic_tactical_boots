@@ -1486,40 +1486,8 @@ func sessionGeneration(sess engsession.Session) (container.EgressGeneration, err
 	return generation, err
 }
 
-func withAppliedGeneration(sess engsession.Session, generation container.EgressGeneration) engsession.Session {
-	state := sess.EgressRuntimeState()
-	state.AppliedRevision, state.AppliedHash, state.Transition = generation.Revision, generation.Hash, nil
-	sess.SetEgressRuntimeState(state)
-	return sess
-}
-
-func copySessionAuthority(target, source engsession.Session) engsession.Session {
-	target.EgressGrants = append([]engsession.EgressGrant(nil), source.EgressGrants...)
-	target.GrantRevision = source.GrantRevision
-	return target
-}
-
-func withEgressUncertaintyFailure(d *dependencies, sess engsession.Session) engsession.Session {
-	sess.UpdatedAt = d.now().UTC()
-	sess.SetFailure(engsession.Failure{
-		Version: 1, Phase: "network", Code: "network_authority_uncertain", Required: true,
-		Summary: "The session network boundary could not be proven.",
-		Action:  "Stop the session, then create a fresh run before granting network access.",
-	})
-	return sess
-}
-
 func hasEgressUncertaintyFailure(sess engsession.Session) bool {
 	return sess.LastFailure != nil && sess.LastFailure.Phase == "network" && sess.LastFailure.Code == "network_authority_uncertain"
-}
-
-func stopForEgressUncertainty(d *dependencies, sess engsession.Session) engsession.Session {
-	now := d.now().UTC()
-	sess.Status = engsession.StatusStopped
-	sess.PID, sess.ProcessToken = 0, ""
-	sess.StoppedAt, sess.UpdatedAt = now, now
-	sess.SetEgressRuntimeState(engsession.EgressRuntimeState{})
-	return withEgressUncertaintyFailure(d, sess)
 }
 
 type egressRecordTransaction interface {
@@ -1557,108 +1525,50 @@ func failClosedEgressWithUpperBound(d *dependencies, tx egressRecordTransaction,
 	if upperBound != nil {
 		current = *upperBound
 	}
-	if err := d.teardownEgress(current); err != nil {
-		// Do not claim stopped when teardown itself is unproven. The fixed marker
-		// is best-effort under simultaneous runtime and record-store failure; a
-		// bounded retry covers transient and directory-commit uncertainty.
-		if err := commitEgressFailureState(tx, withEgressUncertaintyFailure(d, current)); err != nil {
+	adapter, _ := engsession.NewProtocolAdapter(current)
+	state, err := adapter.BlockedTeardownState()
+	if err != nil {
+		return ErrEgressAuthorityUncertain
+	}
+	state, ok := engsession.ReduceProtocol(state, engsession.ProtocolEvent{Action: engsession.ProtocolRequestTeardown})
+	if !ok || state.Effect != engsession.ProtocolTeardownEffect {
+		return ErrEgressAuthorityUncertain
+	}
+	if teardownErr := d.teardownEgress(current); teardownErr != nil {
+		unknown, ok := engsession.ReduceProtocol(state, engsession.ProtocolEvent{Action: engsession.ProtocolTeardownAction, Outcome: engsession.ProtocolTeardownUnknown})
+		if !ok {
 			return ErrEgressAuthorityUncertain
 		}
+		blocked, candidateErr := adapter.TeardownUnknownCandidate(unknown, d.now())
+		if candidateErr != nil {
+			return ErrEgressAuthorityUncertain
+		}
+		// Do not claim stopped when teardown itself is unproven. The fixed marker
+		// retains the selected durable upper bound and is retried a bounded number
+		// of times across transient and directory-commit uncertainty.
+		_ = commitEgressFailureState(tx, blocked)
 		return ErrEgressAuthorityUncertain
 	}
-	stopped := current
-	if restore != nil {
-		stopped = copySessionAuthority(stopped, *restore)
-	}
-	stopped = stopForEgressUncertainty(d, stopped)
-	if err := commitEgressFailureState(tx, stopped); err != nil {
+	terminal, ok := engsession.ReduceProtocol(state, engsession.ProtocolEvent{Action: engsession.ProtocolTeardownAction, Outcome: engsession.ProtocolTeardownProven})
+	if !ok {
 		return ErrEgressAuthorityUncertain
 	}
+	stopped, err := adapter.TeardownProvenCandidate(terminal, restore, d.now())
+	if err != nil {
+		return ErrEgressAuthorityUncertain
+	}
+	_ = commitEgressFailureState(tx, stopped)
 	return ErrEgressAuthorityUncertain
 }
 
-func commitRecoveredGeneration(d *dependencies, tx *engsession.RecordTx, sess engsession.Session, generation container.EgressGeneration) error {
-	if err := tx.Commit(withAppliedGeneration(sess, generation)); err != nil {
-		return failClosedEgressWithDeps(d, tx, nil)
-	}
-	return nil
-}
-
-// recoverRunningSessionEgress resolves every persisted transition without
-// guessing. Widen re-applies the already-durable upper bound. Narrow commits an
-// exactly acknowledged candidate, cancels an untouched transition, or restores
-// the still-durable old bound when runtime identity is unknown.
+// recoverRunningSessionEgress resolves persisted runtime state without
+// guessing; the protocol driver correlates every inspected concrete generation.
 func recoverRunningSessionEgress(ctx context.Context, tx *engsession.RecordTx) error {
 	return recoverRunningSessionEgressWithDeps(defaultDependencies(), ctx, tx)
 }
 
 func recoverRunningSessionEgressWithDeps(d *dependencies, ctx context.Context, tx *engsession.RecordTx) error {
-	sess := tx.Session()
-	if sess.Status != engsession.StatusRunning {
-		return nil
-	}
-	if hasEgressUncertaintyFailure(sess) {
-		return failClosedEgressWithDeps(d, tx, nil)
-	}
-	state := sess.EgressRuntimeState()
-	durableGeneration, err := sessionGeneration(sess)
-	if err != nil {
-		return failClosedEgressWithDeps(d, tx, nil)
-	}
-	if state.Transition == nil {
-		if state.AppliedRevision == durableGeneration.Revision && state.AppliedHash == durableGeneration.Hash {
-			if current, inspectErr := d.inspectEgress(ctx, sess); inspectErr == nil && current == durableGeneration {
-				return nil
-			}
-		}
-		if err := d.applyEgressOverlay(ctx, sess, sessionEgressViews(sess)); err != nil {
-			return failClosedEgressWithDeps(d, tx, nil)
-		}
-		return commitRecoveredGeneration(d, tx, tx.Session(), durableGeneration)
-	}
-
-	transition := state.Transition
-	switch transition.Direction {
-	case engsession.EgressDirectionWiden:
-		if transition.CandidateRevision != durableGeneration.Revision || transition.CandidateHash != durableGeneration.Hash {
-			return failClosedEgressWithDeps(d, tx, nil)
-		}
-		if current, inspectErr := d.inspectEgress(ctx, sess); inspectErr != nil || current != durableGeneration {
-			if err := d.applyEgressOverlay(ctx, sess, sessionEgressViews(sess)); err != nil {
-				return failClosedEgressWithDeps(d, tx, nil)
-			}
-		}
-		return commitRecoveredGeneration(d, tx, tx.Session(), durableGeneration)
-	case engsession.EgressDirectionNarrow:
-		candidate := sess
-		candidate.EgressGrants = append([]engsession.EgressGrant(nil), transition.CandidateGrants...)
-		candidate.GrantRevision = transition.CandidateRevision
-		candidateGeneration, err := sessionGeneration(candidate)
-		if err != nil || candidateGeneration.Hash != transition.CandidateHash {
-			return failClosedEgressWithDeps(d, tx, nil)
-		}
-		current, inspectErr := d.inspectEgress(ctx, sess)
-		if inspectErr == nil {
-			switch current {
-			case candidateGeneration:
-				final := copySessionAuthority(tx.Session(), candidate)
-				if err := tx.Commit(withAppliedGeneration(final, candidateGeneration)); err != nil {
-					return failClosedEgressWithDeps(d, tx, nil)
-				}
-				return nil
-			case durableGeneration:
-				return commitRecoveredGeneration(d, tx, tx.Session(), durableGeneration)
-			}
-		}
-		// Unknown runtime identity is restored to the old durable bound; that
-		// may cancel the interrupted revoke but never exceeds durable authority.
-		if err := d.applyEgressOverlay(ctx, sess, sessionEgressViews(sess)); err != nil {
-			return failClosedEgressWithDeps(d, tx, nil)
-		}
-		return commitRecoveredGeneration(d, tx, tx.Session(), durableGeneration)
-	default:
-		return failClosedEgressWithDeps(d, tx, nil)
-	}
+	return recoverRunningSessionEgressProtocol(d, ctx, tx)
 }
 
 func grantSessionEgress(ctx context.Context, store engsession.Store, id, host string, port int, now time.Time) (engsession.Session, engsession.EgressGrant, error) {

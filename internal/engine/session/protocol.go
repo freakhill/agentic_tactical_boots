@@ -1000,6 +1000,41 @@ func (a *ProtocolAdapter) bindConcreteOwner(owner ProtocolOwner, pid int, token 
 	return nil
 }
 
+// EgressTransitionStates frames one persisted widen/narrow marker as both its
+// active apply state and the blocked positive-inspect recovery state. Owner
+// bytes are carried only for projection and do not authorize process effects.
+func (a *ProtocolAdapter) EgressTransitionStates() (ProtocolState, ProtocolState, error) {
+	if a.original.Status != StatusRunning || a.original.egressTransition == nil || !validEgressRuntimeState(a.original) || (a.original.LastFailure != nil && a.original.LastFailure.Phase == "network" && a.original.LastFailure.Code == "network_authority_uncertain") {
+		return ProtocolState{}, ProtocolState{}, fmt.Errorf("protocol egress transition recovery is unavailable")
+	}
+	state := NormalizeProtocolState(a.baseline)
+	state.Health, state.Mode = ProtocolHealthy, ProtocolNormal
+	state.Operation, state.Effect, state.Result = ProtocolIdle, ProtocolNoEffect, ProtocolSuccess
+	a.mapConcreteTransition(&state, a.original)
+	if state.Health == ProtocolCorrupt || state.Health == ProtocolStale || state.Direction == ProtocolNoDirection {
+		return ProtocolState{}, ProtocolState{}, fmt.Errorf("protocol egress transition recovery is invalid")
+	}
+	if _, ok := a.owners[ProtocolOwnerA]; !ok {
+		a.owners[ProtocolOwnerA] = protocolConcreteOwner{pid: a.original.PID, token: a.original.ProcessToken}
+	}
+	state.Status, state.Owners, state.Detached = ProtocolRunning, ProtocolOwnerA, a.original.Detached
+	state.Health, state.Mode, state.Result = ProtocolHealthy, ProtocolNormal, ProtocolPending
+	switch state.Direction {
+	case ProtocolWidenDirection:
+		state.Operation = ProtocolWiden
+	case ProtocolNarrowDirection:
+		state.Operation = ProtocolNarrow
+	default:
+		return ProtocolState{}, ProtocolState{}, fmt.Errorf("protocol egress transition direction is invalid")
+	}
+	state.Effect = ProtocolApply
+	active := NormalizeProtocolState(state)
+	recovery := active
+	recovery.Health, recovery.Mode = ProtocolUncertain, ProtocolBlocked
+	recovery.Operation, recovery.Effect, recovery.Result = ProtocolRecover, ProtocolInspect, ProtocolFailure
+	return active, NormalizeProtocolState(recovery), nil
+}
+
 // BindGeneration associates one symbolic generation with exact concrete grant
 // rows and their canonical concrete generation.
 func (a *ProtocolAdapter) BindGeneration(symbol ProtocolGeneration, candidate Session) error {
@@ -1033,6 +1068,22 @@ func (a *ProtocolAdapter) RebaseGeneration(symbol ProtocolGeneration) (ProtocolS
 	state.DurableAuthority, state.DurableRevision = symbol.Authority, symbol.Revision
 	state.RecordedGeneration, state.RuntimeGeneration, state.InspectedGeneration = symbol, symbol, symbol
 	state.RuntimeAuthority = symbol.Authority
+	a.baseline = NormalizeProtocolState(state)
+	return a.baseline, nil
+}
+
+// RebaseVerifiedGeneration is the explicit legacy/bootstrap projection used
+// only after runtime apply and positive inspect proved the canonical concrete
+// generation. Unlike RebaseGeneration, it records canonical applied bytes.
+func (a *ProtocolAdapter) RebaseVerifiedGeneration(symbol ProtocolGeneration) (ProtocolState, error) {
+	state, err := a.RebaseGeneration(symbol)
+	if err != nil {
+		return ProtocolState{}, err
+	}
+	a.generations = make(map[ProtocolGeneration]protocolConcreteGeneration)
+	if err := a.bindGeneration(symbol, a.original, false); err != nil {
+		return ProtocolState{}, err
+	}
 	a.baseline = NormalizeProtocolState(state)
 	return a.baseline, nil
 }
@@ -1093,6 +1144,20 @@ func samePersistentAuthority(a, b Session) bool {
 		}
 	}
 	return true
+}
+
+// GenerationCandidate returns the concrete authority bound to one symbolic
+// generation for runtime apply; it is not itself a persistence candidate.
+func (a ProtocolAdapter) GenerationCandidate(symbol ProtocolGeneration) (Session, error) {
+	symbol = NormalizeProtocolState(ProtocolState{RecordedGeneration: symbol}).RecordedGeneration
+	binding, ok := a.generations[symbol]
+	if !ok {
+		return Session{}, fmt.Errorf("protocol concrete generation is unbound")
+	}
+	candidate := a.original
+	candidate.EgressGrants = append([]EgressGrant(nil), binding.grants...)
+	candidate.GrantRevision = binding.grantRevision
+	return candidate, nil
 }
 
 // GenerationEqual classifies a positive concrete inspect result only by exact
@@ -1197,6 +1262,64 @@ func (a ProtocolAdapter) TerminalCandidate(state ProtocolState) (Session, error)
 	state.Operation, state.Effect, state.Result = ProtocolIdle, ProtocolNoEffect, ProtocolFailure
 	state.PendingAuthority, state.PendingRevision, state.Direction = 0, 0, ProtocolNoDirection
 	return a.projectCandidate(state, false)
+}
+
+// TerminalCandidateWithAuthority restores a known durable authority only after
+// the reducer has classified teardown as proven. Runtime authority remains
+// empty in the terminal candidate.
+func (a ProtocolAdapter) TerminalCandidateWithAuthority(state ProtocolState, authority Session) (Session, error) {
+	if authority.ID != a.original.ID || !samePersistentAuthority(a.original, authority) || !validEgressAuthority(authority) {
+		return Session{}, fmt.Errorf("protocol terminal restore authority is invalid")
+	}
+	candidate, err := a.TerminalCandidate(state)
+	if err != nil {
+		return Session{}, err
+	}
+	candidate.EgressGrants = append([]EgressGrant(nil), authority.EgressGrants...)
+	candidate.GrantRevision = authority.GrantRevision
+	if !validEgressAuthority(candidate) || !validEgressRuntimeState(candidate) {
+		return Session{}, fmt.Errorf("protocol terminal restore candidate is invalid")
+	}
+	return candidate, nil
+}
+
+// TeardownUnknownCandidate persists the fixed blocked marker without changing
+// lifecycle, durable authority, or runtime framing.
+func (a ProtocolAdapter) TeardownUnknownCandidate(state ProtocolState, now time.Time) (Session, error) {
+	state = NormalizeProtocolState(state)
+	if state.Status != ProtocolRunning || state.Health != ProtocolUncertain || state.Mode != ProtocolBlocked || state.Operation != ProtocolTeardown || state.Effect != ProtocolTeardownEffect || state.Result != ProtocolUncertainResult {
+		return Session{}, fmt.Errorf("protocol unknown teardown candidate is invalid")
+	}
+	candidate := a.original
+	setProtocolNetworkUncertainty(&candidate, now)
+	return candidate, nil
+}
+
+// TeardownProvenCandidate projects terminal state and the fixed failure marker.
+// A restore authority is accepted only after the reducer proved teardown.
+func (a ProtocolAdapter) TeardownProvenCandidate(state ProtocolState, restore *Session, now time.Time) (Session, error) {
+	var candidate Session
+	var err error
+	if restore != nil {
+		candidate, err = a.TerminalCandidateWithAuthority(state, *restore)
+	} else {
+		candidate, err = a.TerminalCandidate(state)
+	}
+	if err != nil {
+		return Session{}, err
+	}
+	candidate.StoppedAt = now.UTC()
+	setProtocolNetworkUncertainty(&candidate, now)
+	return candidate, nil
+}
+
+func setProtocolNetworkUncertainty(candidate *Session, now time.Time) {
+	candidate.UpdatedAt = now.UTC()
+	candidate.SetFailure(Failure{
+		Version: 1, Phase: "network", Code: "network_authority_uncertain", Required: true,
+		Summary: "The session network boundary could not be proven.",
+		Action:  "Stop the session, then create a fresh run before granting network access.",
+	})
 }
 
 func (a ProtocolAdapter) projectCandidate(state ProtocolState, preserveBaseline bool) (Session, error) {
