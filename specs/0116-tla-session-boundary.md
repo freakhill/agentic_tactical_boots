@@ -199,11 +199,13 @@ Baseline (2026-07-18, `ab08404`, clean main): focused session/container/CLI test
 
 ## Wave 6 — durable operation and final proof
 
-- [ ] Integrate formal checking into native CI and document the claim boundary
+- [x] Integrate formal checking into native CI and document the claim boundary
   FILE:     `Makefile`, `README.md`, `CONTRIBUTING.md`, `formal/session/README.md`, `specs/0116-tla-session-boundary.md`, `.github/workflows/go.yml`, `.woodpecker/go.yml`
   CHANGE:   Add `check-tla-session` to `make check`; keep both CI surfaces single-source through `make check`/`make build`. Add GitHub `actions/setup-java@v4` with Temurin 21 before `make check`; add an explicit `java -version` preflight and documented Java 17+ host prerequisite to the local Woodpecker lane rather than installing a runtime from pipeline code. Document Java/checker bootstrap, offline use, pin update review, state/runtime budgets, source-of-truth direction, the complete concrete→abstract field map above, accepted/dropped DOT grammar fields, epistemic quotient limitation, counterexample classification/manual Go regression workflow, assumptions, opaque platform-specific process tokens, tokenless/external-runtime limitations, and separate behavior-fix rule. Update skills only if an operator surface actually changed (none is planned).
   VERIFY:   `git diff --check && rg -n 'check-tla-session|TLA_OFFLINE|graph|counterexample|tokenless|finite' README.md CONTRIBUTING.md formal/session/README.md Makefile && rg -n 'setup-java|java-version|make check|make build' .github/workflows/go.yml && rg -n 'java -version|make check|make build' .woodpecker/go.yml`
   EXPECTED: GitHub has a deterministic Java setup, Woodpecker fails early with its documented host prerequisite, both execute the same native gate, and no operator/runtime dependency or public behavior is added.
+
+  TASK 13 EVIDENCE: `make check` now owns the bounded model/mutant/graph/mutation gate. GitHub installs Temurin 21 with `actions/setup-java@v4`; the native Woodpecker lane documents Java 17+ and runs `java -version` before the same `make check`/`make build` surfaces without installing anything. README/CONTRIBUTING/formal docs now cover bootstrap/offline/pin review, budgets, independent source direction, the complete concrete map, strict accepted/dropped DOT grammar, the raw-state versus epistemic quotient, counterexample classification/manual RED regression, separate behavior fixes, effect assumptions, opaque/tokenless owner limits, external-runtime limits, and finite/no-runtime-dependency claims. No skill or operator surface changed. Independent review found no blocker/high; exact searches, diff, and model conformance exited 0.
 
 - [ ] Run independent model/spec/code review and authoritative verification
   FILE:     whole branch; acceptance note in `specs/0116-tla-session-boundary.md`

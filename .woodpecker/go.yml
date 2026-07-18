@@ -2,8 +2,10 @@
 # agent. This mirrors the local `make check` / `make build` exactly.
 #
 # Runs on Woodpecker's local backend (commands execute on the agent host), so the
-# host must have the Go toolchain + make on PATH. (If your Woodpecker predates the
-# `labels:` filter, use a top-level `platform: darwin/arm64` instead.)
+# host must have the Go toolchain, make, and Java 17+ on PATH. The pipeline does
+# not install a runtime; java -version is an explicit fail-early preflight.
+# If Woodpecker predates the `labels:` filter, use a top-level
+# `platform: darwin/arm64` instead.
 when:
   - event: push
     branch: main
@@ -13,5 +15,6 @@ labels:
 steps:
   - name: check
     commands:
-      - make check   # complete local static/unit/Emacs contract gate
+      - java -version # Java 17+ host prerequisite for the bounded TLA+ gate
+      - make check   # complete local static/unit/Emacs/TLA+ contract gate
       - make build   # static CGO_ENABLED=0 binary

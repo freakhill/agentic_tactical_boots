@@ -113,7 +113,7 @@ check-host-helper-exec:
 check-hostpath-imports:
 	ci/hostpath-import-denylist.sh
 
-check: check-assets check-npm-locks check-proxy-image-lock check-active-surface-drift check-catalog-sync check-pivot-denylist check-host-helper-exec check-hostpath-imports vet fmtcheck test test-emacs
+check: check-assets check-npm-locks check-proxy-image-lock check-active-surface-drift check-catalog-sync check-pivot-denylist check-host-helper-exec check-hostpath-imports check-tla-session vet fmtcheck test test-emacs
 
 install-emacs:
 	mkdir -p "$(HOME)/.local/share/safeslop/emacs"

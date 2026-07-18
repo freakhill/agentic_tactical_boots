@@ -842,7 +842,9 @@ create a new session.
 
 ## Development
 
-Requirements for engine work:
+Requirements for engine work are the Go toolchain, Make, supported Emacs, and a
+Java 17+ runtime for the development-only bounded TLA+ check. CI uses Temurin
+21. Java and TLA+ are not runtime dependencies of the signed Go binary.
 
 ```bash
 make check
@@ -867,6 +869,7 @@ will also build and install it into `~/.local/bin`.
 - active docs/workflow drift check for removed VM and obsolete image surfaces (`make check-active-surface-drift`)
 - catalog render drift check (`make check-catalog-sync`)
 - specs/0049 pivot denylist, host-helper exec denylist, and hostpath import gates
+- the finite session-protocol model, unsafe mutants, and bidirectional TLA+/Go graph conformance (`make check-tla-session`)
 - `go vet ./...`
 - `gofmt` verification for `cmd` and `internal`
 - `go test ./...`
@@ -883,7 +886,17 @@ make test-emacs EMACS=/absolute/path/to/emacs
 make test-emacs-ui-matrix
 make test-container-images          # opt-in Docker image build gate
 make test-progressive-egress-smoke  # opt-in real Docker grant/revoke smoke
+make bootstrap-tla-session          # acquire/verify the pinned checker once
+TLA_OFFLINE=1 make check-tla-session # rerun model + graph conformance offline
 ```
+
+The session checker is an exhaustive **finite** development/CI safety check, not
+an unbounded proof or a runtime monitor. Its independently authored TLA+ model
+and Go reducer are compared as normalized labelled graphs in both directions;
+see [`formal/session/README.md`](formal/session/README.md) for bounds, the concrete
+field map, assumptions, tokenless/external-runtime limitations, checker pin
+review, and the counterexample-to-Go-regression workflow. `TLA_OFFLINE=1` requires
+a previously verified cache or a byte-identical `TLA2TOOLS_JAR`.
 
 `make test-emacs-ui-matrix` is the local Emacs compatibility gate: raw Emacs and
 Doom-shim slots always run; real Evil/Doom+Evil slots run when a local Evil build

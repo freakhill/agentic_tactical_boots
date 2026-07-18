@@ -19,6 +19,12 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
       - name: Check
         run: make check
 

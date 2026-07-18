@@ -38,7 +38,8 @@ update all relevant docs and tests in the same change:
 
 ## Verification
 
-Run at least:
+Run at least (Java 17+ is a development/CI prerequisite for the bounded TLA+
+gate; GitHub CI uses Temurin 21):
 
 ```bash
 make check
@@ -47,11 +48,37 @@ make build
 
 `make check` includes asset/catalog drift checks, npm package-lock/SRI and
 proxy-image lock checks, active-surface drift, host-helper and hostpath denylist
-gates, `go vet`, `gofmt` verification, `go test ./...`, and strict Emacs tests.
+gates, the finite session model/mutants and bidirectional TLA+/Go graph check,
+`go vet`, `gofmt` verification, `go test ./...`, and strict Emacs tests.
 Container-image work must also run `make test-container-images`; progressive
 egress work must run the opt-in Docker gate `make test-progressive-egress-smoke`.
 For targeted work, also run the narrower package tests that prove the changed
 behavior.
+
+## Bounded Session Protocol Model
+
+The TLA+ checker is development-only and never enters the Go binary dependency
+closure. Bootstrap its SHA-256-pinned official Tools jar once, then verify an
+offline run:
+
+```bash
+make bootstrap-tla-session
+make check-tla-session
+TLA_OFFLINE=1 make check-tla-session
+```
+
+The safety laws and frozen behavior characterization are the review authority.
+`formal/session/SessionBoundary.tla` and the pure Go reducer are independent peer
+implementations—neither is generated from the other—and their normalized
+initial/state/labelled-edge graphs must match both ways over the reviewed finite
+bounds. If the positive model, a mutant, or graph conformance reports a
+counterexample, classify it before editing: checker/parser issue, model defect,
+reducer/refactor defect, or pre-existing behavior defect. Translate the shortest
+witness through the documented concrete field map and add a manual RED Go
+regression. A behavior defect is a separate approved RED→GREEN change; never
+silently rewrite characterization to make model and code agree. Full assumptions,
+epistemic quotient limits, tokenless/external-runtime exclusions, pin-update
+procedure, and retained artifact paths are in `formal/session/README.md`.
 
 ## Network and File-Sharing Guardrails
 
