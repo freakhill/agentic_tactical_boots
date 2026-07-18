@@ -478,6 +478,53 @@ func TestProtocolAdapterBuildsCommitEffectCandidates(t *testing.T) {
 	}
 }
 
+func TestProtocolAdapterRebaseGenerationFramesLegacyRunningOwner(t *testing.T) {
+	original := Session{ID: "sess-legacy-widen", Environment: "container", Network: "deny", Status: StatusRunning}
+	oldConcrete, ok := canonicalEgressGeneration(original, nil, 0)
+	if !ok {
+		t.Fatal("build old generation")
+	}
+	original.appliedEgressRevision, original.appliedEgressHash = oldConcrete.Revision, oldConcrete.Hash
+	adapter, _ := NewProtocolAdapter(original)
+	oldSymbol := protocolGeneration(0, 0)
+	state, err := adapter.RebaseGeneration(oldSymbol)
+	if err != nil {
+		t.Fatalf("rebase legacy running generation: %v", err)
+	}
+	next := original
+	next.EgressGrants = []EgressGrant{{ID: "g-000001", Host: "api.example.com", Port: 443, Source: "operator", CreatedAt: time.Date(2026, 7, 18, 3, 0, 0, 0, time.UTC)}}
+	next.GrantRevision = 1
+	if err := adapter.BindGeneration(protocolGeneration(ProtocolGrantSet(ProtocolGrantA), 1), next); err != nil {
+		t.Fatal(err)
+	}
+	state, ok = ReduceProtocol(state, ProtocolEvent{Action: ProtocolWidenStart, Grant: ProtocolGrantA})
+	if !ok {
+		t.Fatal("legacy widen start rejected")
+	}
+	candidate, err := adapter.EffectCandidate(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate.PID != 0 || candidate.ProcessToken != "" || candidate.Status != StatusRunning {
+		t.Fatalf("legacy owner framing changed: %+v", candidate)
+	}
+}
+
+func TestReduceProtocolUnknownCommitPreservesBothWorlds(t *testing.T) {
+	state := runningProtocolState()
+	state, ok := ReduceProtocol(state, ProtocolEvent{Action: ProtocolWidenStart, Grant: ProtocolGrantA})
+	if !ok {
+		t.Fatal("widen start rejected")
+	}
+	oldWorld, newWorld, ok := ReduceProtocolUnknownCommit(state, ProtocolWidenCommit)
+	if !ok {
+		t.Fatal("unknown commit worlds rejected")
+	}
+	if oldWorld.DurableAuthority == newWorld.DurableAuthority || oldWorld.Health != ProtocolUncertain || newWorld.Health != ProtocolUncertain || oldWorld.Mode != ProtocolBlocked || newWorld.Mode != ProtocolBlocked {
+		t.Fatalf("unknown worlds old=%+v new=%+v", oldWorld, newWorld)
+	}
+}
+
 func TestProtocolAdapterBuildsNarrowIntentAndFinalCandidates(t *testing.T) {
 	now := time.Date(2026, 7, 18, 2, 45, 0, 0, time.UTC)
 	grant := EgressGrant{ID: "g-000001", Host: "api.example.com", Port: 443, Source: "operator", CreatedAt: now}

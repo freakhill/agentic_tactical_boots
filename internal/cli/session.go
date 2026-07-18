@@ -1557,17 +1557,26 @@ func failClosedEgress(tx egressRecordTransaction, restore *engsession.Session) e
 }
 
 func failClosedEgressWithDeps(d *dependencies, tx egressRecordTransaction, restore *engsession.Session) error {
+	return failClosedEgressWithUpperBound(d, tx, restore, nil)
+}
+
+// failClosedEgressWithUpperBound keeps a safe durable superset when an earlier
+// commit may have installed it but RecordTx cannot classify the directory sync.
+func failClosedEgressWithUpperBound(d *dependencies, tx egressRecordTransaction, restore, upperBound *engsession.Session) error {
 	current := tx.Session()
+	if upperBound != nil {
+		current = *upperBound
+	}
 	if err := d.teardownEgress(current); err != nil {
 		// Do not claim stopped when teardown itself is unproven. The fixed marker
 		// is best-effort under simultaneous runtime and record-store failure; a
 		// bounded retry covers transient and directory-commit uncertainty.
-		if err := commitEgressFailureState(tx, withEgressUncertaintyFailure(d, tx.Session())); err != nil {
+		if err := commitEgressFailureState(tx, withEgressUncertaintyFailure(d, current)); err != nil {
 			return ErrEgressAuthorityUncertain
 		}
 		return ErrEgressAuthorityUncertain
 	}
-	stopped := tx.Session()
+	stopped := current
 	if restore != nil {
 		stopped = copySessionAuthority(stopped, *restore)
 	}
@@ -1688,26 +1697,7 @@ func grantSessionEgressWithDeps(d *dependencies, ctx context.Context, store engs
 		if sess.Status != engsession.StatusRunning {
 			return tx.Commit(next)
 		}
-		generation, err := sessionGeneration(next)
-		if err != nil {
-			return err
-		}
-		oldAuthority := sess
-		pending := withTransition(next, engsession.EgressDirectionWiden, next, generation)
-		if err := tx.Commit(pending); err != nil {
-			if errors.Is(err, engsession.ErrCommitUncertain) {
-				return failClosedEgressWithDeps(d, tx, &oldAuthority)
-			}
-			return err
-		}
-		if err := d.applyEgressOverlay(ctx, next, sessionEgressViews(next)); err != nil {
-			return failClosedEgressWithDeps(d, tx, &oldAuthority)
-		}
-		final := withAppliedGeneration(tx.Session(), generation)
-		if err := tx.Commit(final); err != nil {
-			return failClosedEgressWithDeps(d, tx, &oldAuthority)
-		}
-		return nil
+		return runRunningSessionWidenProtocol(d, ctx, tx, sess, next)
 	})
 	if err != nil {
 		return engsession.Session{}, engsession.EgressGrant{}, err

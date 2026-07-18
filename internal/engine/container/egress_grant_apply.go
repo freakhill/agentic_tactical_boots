@@ -83,17 +83,55 @@ func replaceEgressGeneration(ctx context.Context, eng runtime.Engine, composeFil
 	return generation, files, nil
 }
 
+// EgressGenerationApplication carries private replacement context from the
+// apply boundary to its separately invoked positive inspect boundary.
+type EgressGenerationApplication struct {
+	generation   EgressGeneration
+	overrides    []string
+	alreadyAcked bool
+}
+
+// BeginEnsureEgressGeneration preserves Ensure's pre-replacement observation
+// and starts an exact replacement when needed, but does not perform the final
+// readiness/generation/hash ACK.
+func BeginEnsureEgressGeneration(ctx context.Context, eng runtime.Engine, composeFile, runtimeDir string, grants []SessionGrant, revision int, opts ...OverlayOption) (EgressGenerationApplication, error) {
+	wanted, _, err := BuildEgressGeneration(grants, revision)
+	if err != nil {
+		return EgressGenerationApplication{}, err
+	}
+	if current, err := InspectEgressGeneration(ctx, eng, composeFile); err == nil && current == wanted {
+		return EgressGenerationApplication{generation: current, alreadyAcked: true}, nil
+	}
+	generation, overrides, err := replaceEgressGeneration(ctx, eng, composeFile, runtimeDir, grants, revision, opts...)
+	if err != nil {
+		return EgressGenerationApplication{}, err
+	}
+	return EgressGenerationApplication{generation: generation, overrides: append([]string(nil), overrides...)}, nil
+}
+
+// InspectEgressGenerationApplication positively classifies one prior apply.
+// Replacement command success alone never reaches this result.
+func InspectEgressGenerationApplication(ctx context.Context, eng runtime.Engine, composeFile string, application EgressGenerationApplication) (EgressGeneration, error) {
+	if application.generation.Hash == "" {
+		return EgressGeneration{}, ErrEgressGenerationUncertain
+	}
+	if application.alreadyAcked {
+		return application.generation, nil
+	}
+	if err := waitForProxyGeneration(ctx, eng, composeFile, application.overrides, application.generation); err != nil {
+		return EgressGeneration{}, ErrEgressGenerationUncertain
+	}
+	return application.generation, nil
+}
+
 // EnsureEgressGeneration avoids a connection-dropping replacement when the
 // running proxy already positively acknowledges the desired bytes.
 func EnsureEgressGeneration(ctx context.Context, eng runtime.Engine, composeFile, runtimeDir string, grants []SessionGrant, revision int, opts ...OverlayOption) (EgressGeneration, error) {
-	wanted, _, err := BuildEgressGeneration(grants, revision)
+	application, err := BeginEnsureEgressGeneration(ctx, eng, composeFile, runtimeDir, grants, revision, opts...)
 	if err != nil {
 		return EgressGeneration{}, err
 	}
-	if current, err := InspectEgressGeneration(ctx, eng, composeFile); err == nil && current == wanted {
-		return current, nil
-	}
-	return ApplyEgressGeneration(ctx, eng, composeFile, runtimeDir, grants, revision, opts...)
+	return InspectEgressGenerationApplication(ctx, eng, composeFile, application)
 }
 
 func InspectEgressGeneration(ctx context.Context, eng runtime.Engine, composeFile string) (EgressGeneration, error) {

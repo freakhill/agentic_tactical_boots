@@ -21,6 +21,17 @@ import (
 
 type containerLauncher func(context.Context, runtimepkg.Engine, engexec.LaunchSpec, string, string, []string, []string, string, []string, *policy.Projection, ...container.SessionGrant) (int, error)
 
+type egressApplyEffect struct {
+	inspect func(context.Context) (container.EgressGeneration, error)
+}
+
+func (effect egressApplyEffect) Inspect(ctx context.Context) (container.EgressGeneration, error) {
+	if effect.inspect == nil {
+		return container.EgressGeneration{}, container.ErrEgressGenerationUncertain
+	}
+	return effect.inspect(ctx)
+}
+
 // dependencies is constructed once per command root. Command closures retain
 // that instance, so execution and test seams never rely on mutable package state.
 type dependencies struct {
@@ -44,6 +55,7 @@ type dependencies struct {
 	reapDirectInvocation    func(runtimepkg.Engine, string) error
 	applyEgressOverlay      func(context.Context, engsession.Session, []container.SessionGrant) error
 	replaceEgressOverlay    func(context.Context, engsession.Session, []container.SessionGrant) error
+	beginEgressOverlayApply func(context.Context, engsession.Session, []container.SessionGrant) (egressApplyEffect, error)
 	inspectEgress           func(context.Context, engsession.Session) (container.EgressGeneration, error)
 	teardownEgress          func(engsession.Session) error
 	observeEgress           func(context.Context, engsession.Session) ([]container.EgressObservation, error)
@@ -132,6 +144,24 @@ func defaultDependencies() *dependencies {
 		}
 		_, err = container.ReplaceEgressGeneration(ctx, eng, filepath.Join(stageDir, "compose.yml"), stageDir, desired, sess.GrantRevision)
 		return err
+	}
+	d.beginEgressOverlayApply = func(ctx context.Context, sess engsession.Session, desired []container.SessionGrant) (egressApplyEffect, error) {
+		stageDir, err := sessionStageDir(sess)
+		if err != nil {
+			return egressApplyEffect{}, err
+		}
+		eng, err := d.engineForSession(sess)
+		if err != nil {
+			return egressApplyEffect{}, err
+		}
+		composeFile := filepath.Join(stageDir, "compose.yml")
+		application, err := container.BeginEnsureEgressGeneration(ctx, eng, composeFile, stageDir, desired, sess.GrantRevision)
+		if err != nil {
+			return egressApplyEffect{}, err
+		}
+		return egressApplyEffect{inspect: func(inspectCtx context.Context) (container.EgressGeneration, error) {
+			return container.InspectEgressGenerationApplication(inspectCtx, eng, composeFile, application)
+		}}, nil
 	}
 	// Compatibility callers retain ensure+ACK behavior until their authority
 	// decisions move to the protocol reducer's separate Apply/Inspect effects.

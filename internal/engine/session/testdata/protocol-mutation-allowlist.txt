@@ -21,14 +21,12 @@ internal/cli/session.go|dismissSessionEgressWithDeps|protocol-state|call:Commit
 internal/cli/session.go|dismissSessionEgressWithDeps|protocol-state|call:WithLocked
 internal/cli/session.go|egressSessionWithDeps|egress-authority+egress-runtime|call:recoverRunningSessionEgressWithDeps
 internal/cli/session.go|egressSessionWithDeps|protocol-state|call:WithLocked
-internal/cli/session.go|failClosedEgressWithDeps|egress-authority|call:copySessionAuthority
-internal/cli/session.go|failClosedEgressWithDeps|failure|call:withEgressUncertaintyFailure
-internal/cli/session.go|failClosedEgressWithDeps|lifecycle+owner+egress-runtime|call:stopForEgressUncertainty
+internal/cli/session.go|failClosedEgressWithUpperBound|egress-authority|call:copySessionAuthority
+internal/cli/session.go|failClosedEgressWithUpperBound|failure|call:withEgressUncertaintyFailure
+internal/cli/session.go|failClosedEgressWithUpperBound|lifecycle+owner+egress-runtime|call:stopForEgressUncertainty
 internal/cli/session.go|finishSessionRun|lifecycle+owner+egress-runtime|call:Finish
 internal/cli/session.go|grantSessionEgressWithDeps|egress-authority+egress-runtime|call:recoverRunningSessionEgressWithDeps
 internal/cli/session.go|grantSessionEgressWithDeps|egress-authority|call:AppendGrant
-internal/cli/session.go|grantSessionEgressWithDeps|egress-runtime|call:withAppliedGeneration
-internal/cli/session.go|grantSessionEgressWithDeps|egress-runtime|call:withTransition
 internal/cli/session.go|grantSessionEgressWithDeps|protocol-state|call:Commit
 internal/cli/session.go|grantSessionEgressWithDeps|protocol-state|call:WithLocked
 internal/cli/session.go|recoverRunningSessionEgressWithDeps|EgressGrants|assign

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/freakhill/safeslop/internal/engine/container"
 	runtimepkg "github.com/freakhill/safeslop/internal/engine/container/runtime"
@@ -17,8 +18,106 @@ import (
 
 func TestDefaultDependenciesExposeSeparateEgressApplyAndInspectEffects(t *testing.T) {
 	d := defaultDependencies()
-	if d.replaceEgressOverlay == nil || d.inspectEgress == nil || d.applyEgressOverlay == nil {
+	if d.replaceEgressOverlay == nil || d.beginEgressOverlayApply == nil || d.inspectEgress == nil || d.applyEgressOverlay == nil {
 		t.Fatal("default egress apply, inspect, and compatibility effects must all be available")
+	}
+}
+
+func TestRunningWidenDefaultEnginePreservesEnsureArgvOrder(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	workspace := t.TempDir()
+	store := engsession.NewStore(t.TempDir())
+	sess, err := store.Create("pi", "container", workspace, nowForTest(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.Status, sess.PID, sess.Backend = engsession.StatusRunning, 4242, "docker"
+	oldGeneration, err := sessionGeneration(sess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.SetEgressRuntimeState(engsession.EgressRuntimeState{AppliedRevision: oldGeneration.Revision, AppliedHash: oldGeneration.Hash})
+	if err := store.Save(sess); err != nil {
+		t.Fatal(err)
+	}
+	stageDir, err := sessionStageDir(sess)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(stageDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	composeFile := filepath.Join(stageDir, "compose.yml")
+	if err := os.WriteFile(composeFile, []byte("services: {proxy: {image: fixture}}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, "squid.conf"), []byte("include /etc/squid/session-grants.conf\nhttp_access deny all\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	newGeneration, _, err := container.BuildEgressGeneration([]container.SessionGrant{{Host: "example.com", Port: 443}}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logPath, markerPath := filepath.Join(home, "engine.log"), filepath.Join(home, "applied")
+	for _, path := range []string{logPath, markerPath} {
+		if strings.Contains(path, "'") {
+			t.Fatalf("fixture path is not shell-safe: %q", path)
+		}
+	}
+	script := filepath.Join(home, "engine.sh")
+	scriptBody := "#!/bin/sh\nset -eu\n" +
+		"log='" + logPath + "'\nmarker='" + markerPath + "'\n" +
+		"printf '%s\\n' \"$*\" >> \"$log\"\n" +
+		"case \"$*\" in *' up -d --no-deps --force-recreate proxy') : > \"$marker\";; esac\n" +
+		"if [ -e \"$marker\" ]; then rev=1; hash='" + newGeneration.Hash + "'; else rev=0; hash='" + oldGeneration.Hash + "'; fi\n" +
+		"case \"$*\" in\n" +
+		"  *' ps --status running -q proxy') printf 'proxy-id-full\\n';;\n" +
+		"  'ps -q --filter '*) printf 'proxy-id\\n';;\n" +
+		"  'inspect -f '*) printf '%s %s\\n' \"$rev\" \"$hash\";;\n" +
+		"  *' sha256sum /etc/squid/safeslop.d/session-grants.conf') printf '%s  file\\n' \"$hash\";;\n" +
+		"esac\n"
+	if err := os.WriteFile(script, []byte(scriptBody), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	d := defaultDependencies()
+	d.backendEngine = func(name string) (runtimepkg.Engine, error) {
+		if name != "docker" {
+			t.Fatalf("backend = %q", name)
+		}
+		return runtimepkg.HostDockerEngine{Path: script}, nil
+	}
+	d.teardownEgress = func(engsession.Session) error {
+		t.Fatal("successful default-engine widen tore down")
+		return nil
+	}
+	if _, _, err := grantSessionEgressWithDeps(d, context.Background(), store, sess.ID, "example.com", 443, nowForTest(t)); err != nil {
+		t.Fatalf("grant with default engine effects: %v", err)
+	}
+	logBody, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs := strings.Split(strings.TrimSpace(string(logBody)), "\n")
+	project, override := filepath.Base(stageDir), filepath.Join(stageDir, "egress.override.yml")
+	base := "compose -p " + project + " --project-directory " + stageDir + " -f " + composeFile
+	withOverride := base + " -f " + override
+	ready := "exec -T proxy bash -ec squid -k check >/dev/null 2>&1 && exec 3<>/dev/tcp/127.0.0.1/3128"
+	projectPS := "ps -q --filter label=com.docker.compose.project=" + project + " --filter label=com.docker.compose.service=proxy"
+	inspect := `inspect -f {{ index .Config.Labels "safeslop.egress-revision" }} {{ index .Config.Labels "safeslop.egress-hash" }} proxy-id-full`
+	baseInspect := []string{base + " " + ready, base + " ps --status running -q proxy", projectPS, inspect, base + " exec -T proxy sha256sum /etc/squid/safeslop.d/session-grants.conf"}
+	wantRuns := append([]string{}, baseInspect...)
+	wantRuns = append(wantRuns, baseInspect...)
+	wantRuns = append(wantRuns,
+		withOverride+" up -d --no-deps --force-recreate proxy",
+		withOverride+" "+ready,
+		withOverride+" ps --status running -q proxy",
+		projectPS,
+		inspect,
+		withOverride+" exec -T proxy sha256sum /etc/squid/safeslop.d/session-grants.conf",
+	)
+	if strings.Join(runs, "\n") != strings.Join(wantRuns, "\n") {
+		t.Fatalf("running widen engine argv:\n got %q\nwant %q", runs, wantRuns)
 	}
 }
 
@@ -31,6 +130,15 @@ func installEgressSeams(t *testing.T,
 	d := defaultDependencies()
 	if apply != nil {
 		d.applyEgressOverlay = apply
+		d.replaceEgressOverlay = apply
+		d.beginEgressOverlayApply = func(ctx context.Context, sess engsession.Session, desired []container.SessionGrant) (egressApplyEffect, error) {
+			if err := apply(ctx, sess, desired); err != nil {
+				return egressApplyEffect{}, err
+			}
+			return egressApplyEffect{inspect: func(inspectCtx context.Context) (container.EgressGeneration, error) {
+				return d.inspectEgress(inspectCtx, sess)
+			}}, nil
+		}
 	}
 	if inspect != nil {
 		d.inspectEgress = inspect
@@ -116,7 +224,7 @@ func TestSessionGrantWidenPersistsUpperBoundBeforeRuntimeAck(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, runtimeGeneration := seedAppliedRunningSession(t, store, sess)
-	applyCalls := 0
+	applyCalls, inspectCalls := 0, 0
 	d := installEgressSeams(t,
 		func(_ context.Context, candidate engsession.Session, desired []container.SessionGrant) error {
 			applyCalls++
@@ -135,6 +243,7 @@ func TestSessionGrantWidenPersistsUpperBoundBeforeRuntimeAck(t *testing.T) {
 			return err
 		},
 		func(context.Context, engsession.Session) (container.EgressGeneration, error) {
+			inspectCalls++
 			return runtimeGeneration, nil
 		},
 		func(engsession.Session) error { t.Fatal("successful widen tore down the session"); return nil },
@@ -144,8 +253,8 @@ func TestSessionGrantWidenPersistsUpperBoundBeforeRuntimeAck(t *testing.T) {
 	if err != nil {
 		t.Fatalf("grantSessionEgress: %v", err)
 	}
-	if applyCalls != 1 || len(updated.EgressGrants) != 1 || updated.Status != engsession.StatusRunning {
-		t.Fatalf("updated session = %+v applyCalls=%d", updated, applyCalls)
+	if applyCalls != 1 || inspectCalls != 2 || len(updated.EgressGrants) != 1 || updated.Status != engsession.StatusRunning {
+		t.Fatalf("updated session = %+v applyCalls=%d inspectCalls=%d", updated, applyCalls, inspectCalls)
 	}
 	state := updated.EgressRuntimeState()
 	if state.Transition != nil || state.AppliedRevision != updated.GrantRevision || state.AppliedHash != runtimeGeneration.Hash {
@@ -154,6 +263,110 @@ func TestSessionGrantWidenPersistsUpperBoundBeforeRuntimeAck(t *testing.T) {
 	cue, err := os.ReadFile(filepath.Join(ws, "safeslop.cue"))
 	if err != nil || strings.Contains(string(cue), "example.com") {
 		t.Fatalf("grant mutated profile policy: %s err=%v", cue, err)
+	}
+}
+
+func TestRunningWidenProtocolClassifiesCommitOutcomes(t *testing.T) {
+	sentinel := errors.New("known-old commit")
+	for _, tc := range []struct {
+		name          string
+		commitErrors  []error
+		wantErr       error
+		wantApply     int
+		wantInspect   int
+		wantTeardown  int
+		teardownErr   error
+		wantRunning   bool
+		wantAuthority bool
+	}{
+		{name: "known-new", commitErrors: []error{nil, nil}, wantApply: 1, wantInspect: 1, wantRunning: true, wantAuthority: true},
+		{name: "initial known-old", commitErrors: []error{sentinel}, wantErr: sentinel, wantRunning: true},
+		{name: "initial unknown", commitErrors: []error{engsession.ErrCommitUncertain, nil}, wantErr: ErrEgressAuthorityUncertain, wantTeardown: 1},
+		{name: "initial unknown teardown unproven", commitErrors: []error{engsession.ErrCommitUncertain, nil}, wantErr: ErrEgressAuthorityUncertain, wantTeardown: 1, teardownErr: errors.New("teardown unproven"), wantRunning: true, wantAuthority: true},
+		{name: "final known-old", commitErrors: []error{nil, sentinel, nil}, wantErr: ErrEgressAuthorityUncertain, wantApply: 1, wantInspect: 1, wantTeardown: 1},
+		{name: "final unknown", commitErrors: []error{nil, engsession.ErrCommitUncertain, nil}, wantErr: ErrEgressAuthorityUncertain, wantApply: 1, wantInspect: 1, wantTeardown: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			current := engsession.Session{ID: "sess-widen", Environment: "container", Network: "deny", Status: engsession.StatusRunning, PID: 4242}
+			oldGeneration, err := sessionGeneration(current)
+			if err != nil {
+				t.Fatal(err)
+			}
+			current.SetEgressRuntimeState(engsession.EgressRuntimeState{AppliedRevision: oldGeneration.Revision, AppliedHash: oldGeneration.Hash})
+			next, _, err := engsession.AppendGrant(current, "example.com", 443, nowForTest(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			tx := &scriptedEgressRecordTx{current: current, errors: append([]error(nil), tc.commitErrors...)}
+			applyCalls, inspectCalls, teardownCalls := 0, 0, 0
+			runtimeGeneration := oldGeneration
+			d := defaultDependencies()
+			d.now = func() time.Time { return nowForTest(t) }
+			d.replaceEgressOverlay = func(_ context.Context, candidate engsession.Session, _ []container.SessionGrant) error {
+				applyCalls++
+				var generationErr error
+				runtimeGeneration, generationErr = sessionGeneration(candidate)
+				return generationErr
+			}
+			d.inspectEgress = func(context.Context, engsession.Session) (container.EgressGeneration, error) {
+				inspectCalls++
+				return runtimeGeneration, nil
+			}
+			d.beginEgressOverlayApply = func(applyCtx context.Context, candidate engsession.Session, desired []container.SessionGrant) (egressApplyEffect, error) {
+				if err := d.replaceEgressOverlay(applyCtx, candidate, desired); err != nil {
+					return egressApplyEffect{}, err
+				}
+				return egressApplyEffect{inspect: func(inspectCtx context.Context) (container.EgressGeneration, error) {
+					return d.inspectEgress(inspectCtx, candidate)
+				}}, nil
+			}
+			d.teardownEgress = func(engsession.Session) error {
+				teardownCalls++
+				return tc.teardownErr
+			}
+
+			err = runRunningSessionWidenProtocol(d, context.Background(), tx, current, next)
+			if !errors.Is(err, tc.wantErr) || (tc.wantErr == nil && err != nil) {
+				t.Fatalf("widen error = %v, want %v", err, tc.wantErr)
+			}
+			if applyCalls != tc.wantApply || inspectCalls != tc.wantInspect || teardownCalls != tc.wantTeardown {
+				t.Fatalf("effects apply=%d inspect=%d teardown=%d", applyCalls, inspectCalls, teardownCalls)
+			}
+			if (tx.current.Status == engsession.StatusRunning) != tc.wantRunning || (len(tx.current.EgressGrants) == 1) != tc.wantAuthority {
+				t.Fatalf("final transaction state = %+v runtime=%+v", tx.current, tx.current.EgressRuntimeState())
+			}
+		})
+	}
+}
+
+func TestSessionGrantApplySuccessWithoutPositiveInspectFailsClosed(t *testing.T) {
+	store := engsession.NewStore(t.TempDir())
+	sess, err := store.Create("pi", "container", t.TempDir(), nowForTest(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, oldGeneration := seedAppliedRunningSession(t, store, sess)
+	applyCalls, inspectCalls, teardowns := 0, 0, 0
+	d := installEgressSeams(t,
+		func(context.Context, engsession.Session, []container.SessionGrant) error {
+			applyCalls++
+			return nil
+		},
+		func(context.Context, engsession.Session) (container.EgressGeneration, error) {
+			inspectCalls++
+			return oldGeneration, nil
+		},
+		func(engsession.Session) error { teardowns++; return nil },
+	)
+	if _, _, err := grantSessionEgressWithDeps(d, context.Background(), store, sess.ID, "example.com", 443, nowForTest(t)); !errors.Is(err, ErrEgressAuthorityUncertain) {
+		t.Fatalf("grant error = %v, want ErrEgressAuthorityUncertain", err)
+	}
+	stored, err := store.Get(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if applyCalls != 1 || inspectCalls != 2 || teardowns != 1 || stored.Status != engsession.StatusStopped || len(stored.EgressGrants) != 0 {
+		t.Fatalf("unacknowledged apply state=%+v apply=%d inspect=%d teardown=%d", stored, applyCalls, inspectCalls, teardowns)
 	}
 }
 
@@ -471,7 +684,10 @@ func TestLegacyRunningSessionBootstrapsSameAuthorityBeforeGrant(t *testing.T) {
 			return err
 		},
 		func(context.Context, engsession.Session) (container.EgressGeneration, error) {
-			return runtimeGeneration, errors.New("legacy proxy has no generation")
+			if len(applies) == 0 {
+				return runtimeGeneration, errors.New("legacy proxy has no generation")
+			}
+			return runtimeGeneration, nil
 		}, nil,
 	)
 	if _, _, err := grantSessionEgressWithDeps(d, context.Background(), store, sess.ID, "example.com", 443, nowForTest(t)); err != nil {
@@ -548,6 +764,37 @@ func TestSessionGrantApplyLaunchThreadsStoredGrants(t *testing.T) {
 	}
 	if len(got) != 2 || got[0].Host != "always.example.com" || got[1].Host != "example.com" {
 		t.Fatalf("launch grants = %+v", got)
+	}
+}
+
+func TestSessionGrantDuplicateRunningSessionDoesNotApply(t *testing.T) {
+	store := engsession.NewStore(t.TempDir())
+	sess, err := store.Create("pi", "container", t.TempDir(), nowForTest(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, originalGrant, err := engsession.AppendGrant(sess, "example.com", 443, nowForTest(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, generation := seedAppliedRunningSession(t, store, sess)
+	inspectCalls := 0
+	d := installEgressSeams(t,
+		func(context.Context, engsession.Session, []container.SessionGrant) error {
+			t.Fatal("duplicate grant must not apply a generation")
+			return nil
+		},
+		func(context.Context, engsession.Session) (container.EgressGeneration, error) {
+			inspectCalls++
+			return generation, nil
+		}, nil,
+	)
+	updated, duplicate, err := grantSessionEgressWithDeps(d, context.Background(), store, sess.ID, "example.com", 443, nowForTest(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspectCalls != 1 || duplicate.ID != originalGrant.ID || updated.GrantRevision != sess.GrantRevision || len(updated.EgressGrants) != 1 {
+		t.Fatalf("duplicate result session=%+v grant=%+v inspections=%d", updated, duplicate, inspectCalls)
 	}
 }
 

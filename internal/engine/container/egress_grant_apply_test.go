@@ -153,6 +153,41 @@ func TestInspectEgressGenerationRequiredAfterReplaceSuccess(t *testing.T) {
 	}
 }
 
+func TestEnsureEgressGenerationSplitEffectsPreserveArgvAndOverrideAck(t *testing.T) {
+	grants := []SessionGrant{{Host: "example.com", Port: 443}}
+	dir, composeFile, override, wanted, eng := egressGenerationFixture(t, 4, grants)
+
+	application, err := BeginEnsureEgressGeneration(context.Background(), eng, composeFile, dir, grants, 4)
+	if err != nil {
+		t.Fatalf("BeginEnsureEgressGeneration: %v", err)
+	}
+	readyWithOverride := composeCommandKeyWithOverrides(t, composeFile, []string{override}, "exec", "-T", "proxy", "bash", "-ec", proxyReadyCommand)
+	eng.assertNotRan(t, readyWithOverride)
+	got, err := InspectEgressGenerationApplication(context.Background(), eng, composeFile, application)
+	if err != nil {
+		t.Fatalf("InspectEgressGenerationApplication: %v", err)
+	}
+	if got != wanted {
+		t.Fatalf("inspected generation = %+v, want %+v", got, wanted)
+	}
+	eng.mu.Lock()
+	runs := append([]string(nil), eng.runs...)
+	eng.mu.Unlock()
+	wantRuns := []string{
+		composeCommandKey(t, composeFile, "exec", "-T", "proxy", "bash", "-ec", proxyReadyCommand),
+		composeCommandKey(t, composeFile, "ps", "--status", "running", "-q", "proxy"),
+		composeCommandKeyWithOverrides(t, composeFile, []string{override}, "up", "-d", "--no-deps", "--force-recreate", "proxy"),
+		readyWithOverride,
+		composeCommandKeyWithOverrides(t, composeFile, []string{override}, "ps", "--status", "running", "-q", "proxy"),
+		"ps -q --filter label=com.docker.compose.project=" + filepath.Base(dir) + " --filter label=com.docker.compose.service=proxy",
+		"inspect -f " + proxyGenerationInspectFormat + " proxy-id-full",
+		composeCommandKeyWithOverrides(t, composeFile, []string{override}, "exec", "-T", "proxy", "sha256sum", "/etc/squid/safeslop.d/session-grants.conf"),
+	}
+	if strings.Join(runs, "\n") != strings.Join(wantRuns, "\n") {
+		t.Fatalf("split Ensure command order:\n got %q\nwant %q", runs, wantRuns)
+	}
+}
+
 func TestEnsureEgressGenerationSkipsReplacementOnPositiveAck(t *testing.T) {
 	grants := []SessionGrant{{Host: "example.com", Port: 443}}
 	dir, composeFile, _, wanted, eng := egressGenerationFixture(t, 2, grants)

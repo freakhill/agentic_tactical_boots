@@ -309,6 +309,15 @@ func ReduceProtocol(state ProtocolState, event ProtocolEvent) (ProtocolState, bo
 	return ReduceProtocolWithin(ProtocolBounds{}, state, event)
 }
 
+// ReduceProtocolUnknownCommit returns both correlated raw worlds for a commit
+// whose durability cannot be classified. Production drivers must handle the
+// pair as one blocked epistemic outcome and may not select either as known.
+func ReduceProtocolUnknownCommit(state ProtocolState, action ProtocolAction) (ProtocolState, ProtocolState, bool) {
+	oldWorld, oldOK := ReduceProtocol(state, ProtocolEvent{Action: action, Outcome: ProtocolCommitUnknown, Truth: ProtocolOld})
+	newWorld, newOK := ReduceProtocol(state, ProtocolEvent{Action: action, Outcome: ProtocolCommitUnknown, Truth: ProtocolNew})
+	return oldWorld, newWorld, oldOK && newOK
+}
+
 // ReduceProtocolWithin is deterministic and effect-free. CommitUnknown's Truth
 // selects one raw old/new world for exhaustive bounded exploration; callers may
 // not treat either branch as known because both remain Blocked until recovery.
@@ -1002,9 +1011,21 @@ func (a *ProtocolAdapter) BindGeneration(symbol ProtocolGeneration, candidate Se
 // the reviewed finite relation without permitting two symbols to alias it.
 func (a *ProtocolAdapter) RebaseGeneration(symbol ProtocolGeneration) (ProtocolState, error) {
 	state := NormalizeProtocolState(a.baseline)
-	if state.Status != ProtocolRunning || state.Health != ProtocolHealthy || state.Mode != ProtocolNormal || state.Operation != ProtocolIdle || a.original.egressTransition != nil {
+	stable := state.Health == ProtocolHealthy && state.Mode == ProtocolNormal && state.Operation == ProtocolIdle && state.Effect == ProtocolNoEffect
+	ownerOnlyStale := state.Health == ProtocolStale && state.Mode == ProtocolBlocked && state.Operation == ProtocolRecover && state.Effect == ProtocolNoEffect
+	if a.original.Status != StatusRunning || a.original.egressTransition != nil || !validEgressRuntimeState(a.original) || (!stable && !ownerOnlyStale) {
 		return ProtocolState{}, fmt.Errorf("protocol generation rebase requires a stable running session")
 	}
+	// Generation changes do not authorize owner actions. Frame historical
+	// tokenless or malformed owner bytes under one symbolic owner solely so
+	// candidate projection preserves the already-decoded Running record.
+	if _, ok := a.owners[ProtocolOwnerA]; !ok {
+		a.owners[ProtocolOwnerA] = protocolConcreteOwner{pid: a.original.PID, token: a.original.ProcessToken}
+	}
+	state.Status, state.Owners, state.Detached = ProtocolRunning, ProtocolOwnerA, a.original.Detached
+	state.Health, state.Mode = ProtocolHealthy, ProtocolNormal
+	state.Operation, state.Effect, state.Result = ProtocolIdle, ProtocolNoEffect, ProtocolSuccess
+	state.PendingAuthority, state.PendingRevision, state.Direction = 0, 0, ProtocolNoDirection
 	a.generations = make(map[ProtocolGeneration]protocolConcreteGeneration)
 	if err := a.bindGeneration(symbol, a.original, true); err != nil {
 		return ProtocolState{}, err
@@ -1126,6 +1147,17 @@ func (a ProtocolAdapter) EffectCandidate(state ProtocolState) (Session, error) {
 		return Session{}, fmt.Errorf("protocol commit candidate operation is unsupported")
 	}
 	return a.Candidate(target)
+}
+
+// EffectCandidateFrom projects a later commit from the most recently committed
+// record frame. It preserves transaction revision and out-of-model metadata
+// while retaining the adapter's original concrete owner/generation bindings.
+func (a ProtocolAdapter) EffectCandidateFrom(state ProtocolState, frame Session) (Session, error) {
+	if frame.ID != a.original.ID || frame.Status != a.original.Status || frame.PID != a.original.PID || frame.ProcessToken != a.original.ProcessToken || frame.Detached != a.original.Detached || !samePersistentAuthority(a.original, frame) || !validEgressRuntimeState(frame) {
+		return Session{}, fmt.Errorf("protocol effect candidate frame is incompatible")
+	}
+	a.original = frame
+	return a.EffectCandidate(state)
 }
 
 // Candidate projects modeled durable fields back onto the original Session and
