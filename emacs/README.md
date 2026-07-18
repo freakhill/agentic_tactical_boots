@@ -230,7 +230,7 @@ class, and TTL model — never token/key refs or values.
 | `RET` / `i` | inspect one profile's credential posture (`creds show`) |
 | `A` | link a GitHub App or Forgejo account after a value-free identity review |
 | `U` | unlink a linked account (`host/owner`); profile declarations are unchanged |
-| `R` | configure profile repos: existing provider/origin/read/write scopes are prefilled, then replaced after a before/after review |
+| `R` | configure profile repos; GitHub explicit mode can fetch searchable names from one visibly selected linked App, or retain manual entry |
 | `X` | clear only a profile's GitHub/Forgejo scopes; account links and other providers remain |
 | `e` | edit the CUE block directly |
 | `g` (Evil: `gr`) | refresh account status and credential readiness |
@@ -240,15 +240,29 @@ These uppercase action keys work in raw Emacs and Evil normal state; lowercase
 clone a project profile in `F`, then `A` link account → `R` assign origin or
 explicit repositories → inspect/re-trust the changed policy → launch. `R` fetches
 the project profile list independently of credential rows, so an empty profile is
-selectable. It writes through `safeslop profile credentials set --output json`;
-`X` uses `profile credentials clear`. Emacs never rewrites CUE itself. Setting one
-forge clears only the opposite forge declaration and preserves other credential
-providers. Failed `A`/`R` writes keep value-free drafts; return with `K`, then
-press the same action to correct/retry. `U` warns that unchanged profile scopes
-will fail staging until relinked or cleared with `X`. Live repo discovery remains deliberately deferred:
-GitHub discovery would require a minted installation token and Forgejo discovery
-would use the account-wide token, so the surface accepts origin inference and
-manual `owner/repo` entries only.
+selectable. For GitHub explicit mode it visibly selects one `github.com/owner`
+link, then defaults to **Fetch from linked App**. The async result is a searchable
+installation snapshot; current and off-snapshot scopes stay prefilled, manual
+`owner/repo` input remains accepted, and a current read-only Contents hint makes
+write selection ask again. Presence is never authorization: the normal
+before/after replacement, CUE re-trust, and launch-time downscoped mint remain
+authoritative.
+
+The fetch calls `safeslop creds repositories github.com/owner --output json`.
+That host-only command mints exactly metadata-read authority, never Contents,
+returns no names until complete bounded pagination and revoke succeed, and exposes
+no token/ref. Cleanup uncertainty withholds candidates; an unclean process death
+can leave metadata access until GitHub's one-hour hard expiry. No fetch runs from
+surface refresh, origin mode, manual mode, agent traffic, save, trust, or launch.
+Forgejo live discovery remains deferred because its linked API token may be
+account-wide.
+
+Saving still uses `safeslop profile credentials set --output json`; `X` uses
+`profile credentials clear`. Emacs never rewrites CUE itself. Setting one forge
+clears only the opposite forge declaration and preserves other credential
+providers. Failed discovery or `A`/`R` writes keep value-free drafts; return with
+`K`, then use `R` to retry or select manual entry. `U` warns that unchanged profile
+scopes will fail staging until relinked or cleared with `X`.
 
 Pi OAuth is inspection-only in the Emacs MVP: a row exposes only
 `openai-codex/gpt-5.6-luna`, `access snapshot, short-lived`, provider-default

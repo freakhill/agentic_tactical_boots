@@ -33,6 +33,7 @@ file transfer between host and sandboxed runtimes.
 - `safeslop profile credentials clear <profile> [safeslop.cue] --output json` — remove only `credentials.github`/`credentials.forgejo`, deleting the `credentials` object if it becomes empty.
 - `safeslop creds list|show [<profile>] --output json` — inspect the credential posture of `safeslop.cue` profiles (declared creds + value-free readiness status, including Pi OAuth provider/model/lifetime only); read-only, never reveals secret values, refs, private paths, or exact expiry.
 - `safeslop creds link|unlink|status` — manage host-only account links in `~/.config/safeslop/accounts.cue` (refs + non-secret ids only); `creds status --output json` is the Emacs account-link status envelope.
+- `safeslop creds repositories <github.com/owner> --output json` — explicitly enumerate one linked public-GitHub App installation for the operator picker. It mints exactly metadata-read authority in host memory, uses complete bounded pagination, revokes before returning names, and never stages a token or grants sandbox/session access. Cleanup uncertainty returns no candidates; a process death leaves at most one hour of metadata-only residual authority. The snapshot is not authorization; manual entry, profile confirmation/re-trust, and launch-time intersection remain authoritative. Forgejo discovery stays deferred because its link may be account-wide.
 - `safeslop creds gc --host H --repo owner/repo ... [--dry-run|--yes] [--output json]` — narrow Forgejo deploy-key cleanup. It defaults to dry-run; `--yes` is required to delete and conflicts with `--dry-run`. It considers only exact safeslop titles in the explicitly named repos, rechecks before deletion, and never expands egress or container authority.
 - `safeslop profile defaults --output json` — list signed-binary builtin launchable defaults (`claude`, `fish`, `pi`, `zsh`), distinct from scaffold `profile presets`; each uses container/deny, the pinned buildable `personal` image inputs, and an allowlisted read-only host projection. Project profiles take precedence and an invalid local policy fails closed.
 - `safeslop profile show <name> --output json` — inspect a resolved project or builtin profile with package set, dry-run image recipe, source/path/hash provenance, and structured Authority/Trust/Readiness evaluation.
@@ -209,14 +210,18 @@ Arbitrary custom host mounts are deferred until a mount capability model is
 specified.
 `C-c s K` opens the Credentials surface. Universal raw/Evil keys: `A` links a
 GitHub App/Forgejo account using refs/ids only, `U` unlinks the reusable account,
-`R` configures a project profile's origin/manual `owner/repo` scopes, and `X`
+`R` configures a project profile's origin/explicit `owner/repo` scopes, and `X`
 clears only that profile's forge scopes (`g` refresh raw, `gr` Evil). Create or
-clone a project profile first; builtins are immutable. `R` works when credential
-rows are empty, preloads existing read/write scopes, confirms full replacement,
-and retains value-free failed account/scope drafts for `K → A/R` retry. `U`
-warns that profile scopes remain and will fail staging until relinked or cleared.
-`R`/`X` write through `profile credentials set|clear`; review and re-trust changed policy bytes. Live
-repo discovery remains deferred.
+clone a project profile first; builtins are immutable. In GitHub explicit mode,
+`R` visibly chooses one linked App and defaults to searchable installation names;
+current/off-snapshot entries stay prefilled and manual input remains available.
+It never fetches from refresh, origin/manual mode, agent traffic, save, trust, or
+launch. `R` works when credential rows are empty, confirms full replacement, and
+retains value-free failed account/scope drafts for `K → A/R` retry. `U` warns that
+profile scopes remain and will fail staging until relinked or cleared. `R`/`X`
+write through `profile credentials set|clear`; review and re-trust changed policy
+bytes. Launch-time GitHub authorization remains authoritative; Forgejo live
+discovery remains deferred.
 
 `C-c s P` opens the Sessions portal. The tab strip shows each surface's direct
 switch key (`P` Sessions, `F` Profiles, `K` Credentials); `TAB`/`S-TAB` or

@@ -16,9 +16,19 @@ and success-envelope behavior. The implemented universal raw/Evil actions are
 `A/U/R/X`; project profiles come from existing `profile list`; current value-free
 scope rows prefill a before/after replacement; `X` calls the existing profile
 forge clear contract; successful mutations stay in the surface; failures retain
-a value-free retry draft. Account links remain distinct from profile scopes,
-policy writes still require re-trust, and every no-values/no-live-discovery/session-
-owned lifecycle law remains unchanged.
+a value-free retry draft. Account links remain distinct from profile scopes and
+policy writes still require re-trust.
+
+POST-COMPLETION REFINEMENT (0119): spec 0119 supersedes only this historical
+slice's GitHub live-discovery deferral after a separate ayo/FLO security decision.
+`safeslop creds repositories <github.com/owner> --output json` now performs one
+explicit linked-App metadata-read mint, complete bounded listing, and revoke
+before returning searchable names; cleanup uncertainty withholds candidates and
+GitHub's one-hour expiry bounds unclean process loss. The snapshot never enters
+the sandbox or authorizes launch; manual entry, full replacement, re-trust, and
+launch-time downscoping remain. Forgejo live discovery remains deferred because
+its linked token may be account-wide. All no-values and session runtime-credential
+laws remain unchanged.
 
 ## Problem
 

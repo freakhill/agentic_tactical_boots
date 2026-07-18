@@ -82,6 +82,7 @@ safeslop profile credentials clear <profile> [safeslop.cue] --output json
 safeslop creds link|unlink|status                 manage value-free forge account links
 safeslop creds gc --host H --repo owner/repo ... [--dry-run|--yes] [--output json]  narrow Forgejo deploy-key cleanup
 safeslop creds status --output json               account-link status envelope for UIs
+safeslop creds repositories <github.com/owner> --output json  explicit linked-App repository snapshot
 safeslop lock [profile] --output json              write repo-root safeslop.lock.json
 safeslop trust [safeslop.cue]       approve this policy's exact bytes
 safeslop untrust [safeslop.cue]     remove approval so launches must be re-trusted
@@ -796,6 +797,17 @@ decay-first safety guarantee.
   link|unlink|status`; UI clients use `safeslop creds status --output json`, whose
   `data.links` rows expose only forge, host, owner, non-secret ids, value-free
   probe class, SSH port, and TTL model.
+- `safeslop creds repositories <github.com/owner> --output json` explicitly lists
+  one linked public-GitHub App installation's repositories for operator selection.
+  It resolves the existing key ref on the host, mints exactly a metadata-read token
+  with no repository selector, traverses a complete bounded snapshot (at most 100
+  pages / 10,000 names), and revokes before returning names. Nothing is staged or
+  exposed to a sandbox. Cleanup uncertainty fails with
+  `CREDENTIAL_REVOKE_FAILED` and withholds candidates; an unclean process death can
+  leave metadata-only access until GitHub's hard expiry, at most one hour. The
+  snapshot is not authorization: policy confirmation, re-trust, and launch-time
+  repository/permission intersection remain authoritative. Forgejo live discovery
+  remains deferred because its linked token may be account-wide.
 - `safeslop creds gc --host H --repo owner/repo ...` is a narrow Forgejo deploy-key
   cleanup. It defaults to discovery-only; deletion requires `--yes` (which cannot
   be combined with `--dry-run`). It discovers every requested repository before
@@ -825,9 +837,14 @@ Evil normal state. Lowercase `a`/`u`/`p` remain raw-Emacs compatibility aliases.
 For first-time setup, create or clone a **project** profile first (builtins are
 immutable), then press `A` to link the host account and `R` to assign origin or
 explicit read/write repositories. Account identity is reviewed value-free before
-linking. `R` loads all project profiles even when the credential table is empty,
-prefills existing provider/mode/read/write scopes, and confirms a before/after
-full replacement; changing provider clears only the other forge declaration.
+linking. For GitHub explicit mode, `R` visibly chooses one linked App account and
+then defaults to **Fetch from linked App**; the returned names are searchable
+suggestions, existing/off-snapshot entries stay prefilled, and validated manual
+`owner/repo` entry remains available. The current Contents maximum is only a hint;
+currently impossible write selection requires an extra acknowledgement and launch
+still fails closed if access changed. `R` loads all project profiles even when the
+credential table is empty, then confirms a before/after full replacement; changing
+provider clears only the other forge declaration.
 `X` removes profile forge scopes while retaining reusable account links and
 unrelated credential providers. Failed account/scope writes retain value-free
 drafts: return with `K`, then press `A` or `R` to correct/retry. Successful scope
@@ -837,18 +854,15 @@ cleared with `X`.
 
 The surface is backed by `safeslop creds list [safeslop.cue] --output json`,
 `safeslop creds show <profile> --output json`, `safeslop creds status --output
-json`, and `safeslop profile credentials set|clear ... --output json` for
-structured profile credential mutation. The repo picker can choose origin
-inference or manually entered `owner/repo` rows with read/write access and writes
-`credentials.github` or `credentials.forgejo` while preserving other credential
-providers; setting one forge clears the other. Live repo discovery is
-deliberately deferred: GitHub listing would require an installation token and
-Forgejo listing would use an account-wide token outside this slice's
-session-owned lifecycle. The readiness probe resolves each ref only to keep the
-pass/fail result and **discards the value**, so no secret is ever read into the UI
-or the envelope. There is no in-UI mint/revoke — ephemeral keys live and die with
-a session (`run`/`session`), so the surface is account linking + repo scope
-selection, not a secret vault. Pi OAuth is likewise inspection-only in Emacs MVP:
+json`, the explicit account-scoped `safeslop creds repositories`, and `safeslop
+profile credentials set|clear ... --output json`. Origin/manual selection remains
+available, and Forgejo discovery remains deferred. The readiness probe resolves
+each ref only to keep the pass/fail result and **discards the value**, so no secret
+is ever read into the UI or envelope. The GitHub discovery token is a separate
+host-only metadata capability cleaned up before suggestions return; it is never a
+runtime credential. Ephemeral git/API credentials still live and die only with a
+session (`run`/`session`), so the surface is account linking + scope selection,
+not a secret vault. Pi OAuth is likewise inspection-only in Emacs MVP:
 add its literal CUE block manually, review/re-trust the changed exact bytes, and
 create a new session.
 

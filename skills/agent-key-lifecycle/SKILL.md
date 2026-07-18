@@ -20,9 +20,12 @@ agent sessions.
 ## Current command surface
 
 Credential staging is driven by `safeslop run <profile>` from the profile's
-`credentials:` block. There is still no standalone credential mint UI: live
-GitHub/Forgejo credentials are created only for a run/session and are revoked or
-wiped by teardown. Pi OAuth is different: safeslop snapshots an existing host
+`credentials:` block. There is still no standalone **runtime** credential mint
+UI: GitHub/Forgejo git/API credentials are created only for a run/session and are
+revoked or wiped by teardown. The explicit repository selector is a separate
+exception: it mints only host-memory metadata-read authority, cleans it up before
+returning names, and never stages or authorizes runtime access. Pi OAuth is
+different: safeslop snapshots an existing host
 access bearer without refresh authority; teardown wipes local copies but cannot
 revoke it at the issuer.
 
@@ -33,6 +36,18 @@ host-only) and hold non-secret ids + secret *refs* only. `link` probes the forge
 json` is the UI contract and returns `data.links` rows with forge, host, owner,
 non-secret ids, value-free probe class, SSH port, and TTL model only. The legacy
 human `status` and raw `--json` forms remain for compatibility.
+
+`safeslop creds repositories <github.com/owner> --output json` is an explicit,
+one-linked-App discovery snapshot for selectors. It requests exactly
+`metadata:read`, omits repository selectors so GitHub can enumerate the
+installation, caps complete pagination at 100 pages / 10,000 names, and revokes
+before emitting candidates. It never uses Contents, a PAT/user token, ambient
+`gh`, staging, or sandbox access. Revoke uncertainty fails with
+`CREDENTIAL_REVOKE_FAILED` and no candidates; if the host process dies first,
+the metadata-only token's hard residual lifetime is at most one hour. The result
+is UI assistance, not authorization; profile confirmation/re-trust and
+launch-time intersection remain authoritative. Forgejo discovery remains
+deferred because its linked token may be account-wide.
 
 Profile forge scopes can be authored without hand-editing CUE through
 `safeslop profile credentials set|clear ... --output json`. `set` writes either
@@ -57,9 +72,11 @@ when no credential rows exist, preloads current value-free read/write scopes, an
 confirms the complete replacement. Failed account/scope writes retain value-free
 drafts for `K → A/R` retry. Scope changes modify policy bytes and require
 review/re-trust. Account unlink warns that declared profiles will fail staging
-until relinked or cleared; unlink and profile clear are deliberately separate. The surface never
-reveals values and never mints/revokes; staging stays at run time and revocation
-at `session stop`.
+until relinked or cleared; unlink and profile clear are deliberately separate.
+For GitHub explicit mode, `R` visibly chooses one linked App and defaults to a
+searchable fetch while retaining manual `owner/repo` entry and off-snapshot
+prefill. This metadata mint/revoke is host-only and separate from runtime
+credentials; staging stays at run time and runtime revocation at `session stop`.
 
 For Emacs-driven sessions, `safeslop session stop --session-id <id>
 --revoke-credentials` revokes ephemeral credentials before forcing process
@@ -169,9 +186,9 @@ no deploy keys, no `gh` CLI. An owner with no account link is a hard error. A
 has file access only and cannot mint, renew, or revoke. `ttl` defaults to `"1h"`;
 a positive Go duration is a run-relative horizon for future staging/renewal, while
 explicit `""` lasts to normal teardown without retroactively invalidating an
-issued token. Live GitHub repository discovery remains deferred because listing
-installation repositories would require a minted installation token outside the
-session-owned lifecycle.
+issued token. Repository-name discovery is the narrower spec-0119 exception
+described above: explicit, metadata-read only, host-memory only, revoked before a
+complete snapshot is returned, and never reused as the session token.
 
 Opt into GitHub API staging only for App mode with unique `permission:read` or
 `permission:write` declarations. One partition receives

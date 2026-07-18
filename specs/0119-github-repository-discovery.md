@@ -40,7 +40,7 @@ DECISIONS: `specs/research/2026-07-18-github-repository-discovery-ayo.md` and `s
   VERIFY:   `emacs -Q --batch -L emacs -l ert -l emacs/test/safeslop-test.el -l emacs/test/safeslop-contract-test.el -l emacs/test/safeslop-credentials-test.el --eval '(ert-run-tests-batch-and-exit "safeslop-test-credentials-.*\(discover\|installation-repositor\|repo-picker\)")' && make test-emacs-ui-matrix`
   EXPECTED: All focused ERT and raw/Doom/Evil/Doom-Evil slots pass; no fetch occurs outside explicit `R`, and no discovery result changes authority before normal confirmation.
 
-- [ ] T6 — Synchronize operator documentation and credential skills
+- [x] T6 — Synchronize operator documentation and credential skills
   FILE:     `README.md`, `emacs/README.md`, `skills/agent-key-lifecycle/SKILL.md`, `skills/agent-sandbox-ops/SKILL.md`, `specs/0090-credential-connection-repo-picker.md`, `specs/0119-github-repository-discovery.md`
   CHANGE:   Replace the deliberate live-GitHub deferral with the exact explicit account-scoped command and Emacs workflow; document metadata-only mint/revoke/one-hour residual, complete snapshot limits, manual fallback, non-authoritative semantics, no Forgejo discovery, unchanged save/re-trust/launch gates, and current command examples/help.
   VERIFY:   `git diff --check && rg -n 'creds repositories|metadata(:|-)read|linked App|one hour|manual|re-trust|launch.*authoritative|Forgejo.*deferred|0119' README.md emacs/README.md skills/agent-{key-lifecycle,sandbox-ops}/SKILL.md specs/0090-credential-connection-repo-picker.md specs/0119-github-repository-discovery.md`
