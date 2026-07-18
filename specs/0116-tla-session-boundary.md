@@ -119,11 +119,13 @@ Baseline (2026-07-18, `ab08404`, clean main): focused session/container/CLI test
 
 ## Wave 3 — production semantic kernel and graph equality
 
-- [ ] Define the pure production protocol reducer under characterization
+- [x] Define the pure production protocol reducer under characterization
   FILE:     new `internal/engine/session/protocol.go`, `internal/engine/session/protocol_test.go`; representation-only helpers in `internal/engine/session/{session.go,egress_grant.go,store.go}` and `internal/engine/egress/generation.go` only when tests force them
   CHANGE:   TDD closed enums/values for protocol state, event/action, bounded outcome, one tagged effect, and caller result; implement effect-free `Reduce`, finite-domain `Enabled`, `InitialStates`, normalization, concrete Session mapping/round-trip, candidate construction, and symbolic/concrete generation-equality fixtures. No I/O, clock, randomness, logging, callbacks, expected-state table, or duplicated guard inside `Enabled`. Characterize currently decodable stale lifecycle/owner shapes as non-normal rather than silently tightening decode behavior. At this checkpoint production call paths remain unchanged.
   VERIFY:   `go test ./internal/engine/session -run 'Protocol|Reducer|Enabled|Adapter|Generation' -count=1 -v && go test -race ./internal/engine/session -run 'Protocol|Reducer|Adapter' -count=1 && git diff --check`
   EXPECTED: Every transition/effect/outcome is typed and deterministic, concrete representation round-trips preserve bytes/semantics, stale shapes remain compatible, and no production caller uses a test-only mirror yet.
+
+  TASK 4 EVIDENCE: The pure reducer reaches all 28 positive TLA+ action labels through `EnabledProtocol` without a duplicate guard table. Twenty-one focused protocol tests cover old/new/unknown commits, exact owners, direction-aware egress, recovery/teardown, normalization, finite rebasing, concrete generation equality, commit-effect candidates, malformed/stale concrete shapes, and binding injectivity. Unknown or tokenless states remain non-normal and cannot be projected as ordinary commit candidates. The focused and race verification commands exited 0; production call paths remain unchanged.
 
 - [ ] Add strict TLC graph parsing and comparator negative controls
   FILE:     new `internal/engine/session/tla_graph_test.go`, new minimal `internal/engine/session/testdata/tlc-v1.7.4-actionlabels.dot`, `formal/session/README.md`
