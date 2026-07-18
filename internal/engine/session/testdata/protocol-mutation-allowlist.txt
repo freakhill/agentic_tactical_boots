@@ -1,6 +1,3 @@
-internal/cli/session.go|clearNarrowTransition|egress-authority|call:copySessionAuthority
-internal/cli/session.go|clearNarrowTransition|egress-runtime|call:withAppliedGeneration
-internal/cli/session.go|clearNarrowTransition|protocol-state|call:Commit
 internal/cli/session.go|cmdSessionListWithDeps|lifecycle+owner+egress-runtime|call:ListReconciled
 internal/cli/session.go|cmdSessionPruneWithDeps|lifecycle+owner+egress-runtime|call:ListReconciled
 internal/cli/session.go|cmdSessionRunWithDeps|lifecycle+owner|call:MarkRunning
@@ -37,9 +34,6 @@ internal/cli/session.go|recoverRunningSessionEgressWithDeps|protocol-state|call:
 internal/cli/session.go|recoverRunningSessionEgress|egress-authority+egress-runtime|call:recoverRunningSessionEgressWithDeps
 internal/cli/session.go|revokeSessionEgressWithDeps|egress-authority+egress-runtime|call:recoverRunningSessionEgressWithDeps
 internal/cli/session.go|revokeSessionEgressWithDeps|egress-authority|call:RevokeGrant
-internal/cli/session.go|revokeSessionEgressWithDeps|egress-authority|call:copySessionAuthority
-internal/cli/session.go|revokeSessionEgressWithDeps|egress-runtime|call:withAppliedGeneration
-internal/cli/session.go|revokeSessionEgressWithDeps|egress-runtime|call:withTransition
 internal/cli/session.go|revokeSessionEgressWithDeps|protocol-state|call:Commit
 internal/cli/session.go|revokeSessionEgressWithDeps|protocol-state|call:WithLocked
 internal/cli/session.go|runDetachWithDeps|Detached|construct
@@ -55,7 +49,6 @@ internal/cli/session.go|stopForEgressUncertainty|egress-runtime|call:SetEgressRu
 internal/cli/session.go|stopForEgressUncertainty|failure|call:withEgressUncertaintyFailure
 internal/cli/session.go|withAppliedGeneration|egress-runtime|call:SetEgressRuntimeState
 internal/cli/session.go|withEgressUncertaintyFailure|failure|call:SetFailure
-internal/cli/session.go|withTransition|egress-runtime|call:SetEgressRuntimeState
 internal/cli/supervise.go|superviseWithDeps|lifecycle+owner+egress-runtime|call:Finish
 internal/cli/supervise.go|superviseWithDeps|owner|call:HandoffRunningDetached
 internal/engine/container/reap.go|SweepDeadInvocations|PID|construct

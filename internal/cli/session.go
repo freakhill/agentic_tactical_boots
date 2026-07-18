@@ -1493,16 +1493,6 @@ func withAppliedGeneration(sess engsession.Session, generation container.EgressG
 	return sess
 }
 
-func withTransition(sess engsession.Session, direction string, candidate engsession.Session, generation container.EgressGeneration) engsession.Session {
-	state := sess.EgressRuntimeState()
-	state.Transition = &engsession.EgressTransition{
-		Direction: direction, CandidateRevision: generation.Revision, CandidateHash: generation.Hash,
-		CandidateGrants: append([]engsession.EgressGrant(nil), candidate.EgressGrants...),
-	}
-	sess.SetEgressRuntimeState(state)
-	return sess
-}
-
 func copySessionAuthority(target, source engsession.Session) engsession.Session {
 	target.EgressGrants = append([]engsession.EgressGrant(nil), source.EgressGrants...)
 	target.GrantRevision = source.GrantRevision
@@ -1732,12 +1722,6 @@ func dismissSessionEgressWithDeps(d *dependencies, store engsession.Store, id, h
 	return committed, acknowledgement, nil
 }
 
-func clearNarrowTransition(tx *engsession.RecordTx, durable engsession.Session, generation container.EgressGeneration) error {
-	current := copySessionAuthority(tx.Session(), durable)
-	current = withAppliedGeneration(current, generation)
-	return tx.Commit(current)
-}
-
 func revokeSessionEgress(ctx context.Context, store engsession.Store, id, grantID string, now time.Time) (engsession.Session, error) {
 	return revokeSessionEgressWithDeps(defaultDependencies(), ctx, store, id, grantID, now)
 }
@@ -1759,45 +1743,7 @@ func revokeSessionEgressWithDeps(d *dependencies, ctx context.Context, store eng
 		if sess.Status != engsession.StatusRunning {
 			return tx.Commit(next)
 		}
-		candidateGeneration, err := sessionGeneration(next)
-		if err != nil {
-			return err
-		}
-		oldGeneration, err := sessionGeneration(sess)
-		if err != nil {
-			return err
-		}
-		pending := withTransition(sess, engsession.EgressDirectionNarrow, next, candidateGeneration)
-		if err := tx.Commit(pending); err != nil {
-			if errors.Is(err, engsession.ErrCommitUncertain) {
-				return failClosedEgressWithDeps(d, tx, &sess)
-			}
-			return err
-		}
-		if err := d.applyEgressOverlay(ctx, next, sessionEgressViews(next)); err != nil {
-			if restoreErr := d.applyEgressOverlay(ctx, sess, sessionEgressViews(sess)); restoreErr != nil {
-				return failClosedEgressWithDeps(d, tx, &sess)
-			}
-			if clearErr := clearNarrowTransition(tx, sess, oldGeneration); clearErr != nil && errors.Is(clearErr, engsession.ErrCommitUncertain) {
-				return failClosedEgressWithDeps(d, tx, &sess)
-			}
-			return err
-		}
-		final := copySessionAuthority(tx.Session(), next)
-		final = withAppliedGeneration(final, candidateGeneration)
-		if err := tx.Commit(final); err != nil {
-			if errors.Is(err, engsession.ErrCommitUncertain) {
-				// The narrower record may already be durable. Never restore the
-				// broader old runtime across that uncertainty.
-				return failClosedEgressWithDeps(d, tx, nil)
-			}
-			if restoreErr := d.applyEgressOverlay(ctx, sess, sessionEgressViews(sess)); restoreErr != nil {
-				return failClosedEgressWithDeps(d, tx, &sess)
-			}
-			_ = clearNarrowTransition(tx, sess, oldGeneration)
-			return err
-		}
-		return nil
+		return runRunningSessionNarrowProtocol(d, ctx, tx, sess, next)
 	})
 }
 

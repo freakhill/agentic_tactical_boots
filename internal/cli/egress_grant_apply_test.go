@@ -339,6 +339,88 @@ func TestRunningWidenProtocolClassifiesCommitOutcomes(t *testing.T) {
 	}
 }
 
+func TestRunningNarrowProtocolClassifiesCommitOutcomes(t *testing.T) {
+	sentinel := errors.New("known-old narrow commit")
+	for _, tc := range []struct {
+		name           string
+		commitErrors   []error
+		wantErr        error
+		wantApply      int
+		wantInspect    int
+		wantRestore    int
+		wantTeardown   int
+		teardownErr    error
+		wantRunning    bool
+		wantAuthority  bool
+		wantTransition bool
+	}{
+		{name: "known-new", commitErrors: []error{nil, nil}, wantApply: 1, wantInspect: 1, wantRunning: true},
+		{name: "intent known-old", commitErrors: []error{sentinel}, wantErr: sentinel, wantRunning: true, wantAuthority: true},
+		{name: "intent unknown", commitErrors: []error{engsession.ErrCommitUncertain, nil}, wantErr: ErrEgressAuthorityUncertain, wantTeardown: 1, wantAuthority: true},
+		{name: "intent unknown teardown unproven", commitErrors: []error{engsession.ErrCommitUncertain, nil}, wantErr: ErrEgressAuthorityUncertain, wantTeardown: 1, teardownErr: errors.New("teardown unproven"), wantRunning: true, wantAuthority: true, wantTransition: true},
+		{name: "final known-old", commitErrors: []error{nil, sentinel, nil}, wantErr: sentinel, wantApply: 1, wantInspect: 1, wantRestore: 1, wantRunning: true, wantAuthority: true},
+		{name: "final unknown", commitErrors: []error{nil, engsession.ErrCommitUncertain, nil}, wantErr: ErrEgressAuthorityUncertain, wantApply: 1, wantInspect: 1, wantTeardown: 1, wantAuthority: true},
+		{name: "final unknown teardown unproven", commitErrors: []error{nil, engsession.ErrCommitUncertain, nil}, wantErr: ErrEgressAuthorityUncertain, wantApply: 1, wantInspect: 1, wantTeardown: 1, teardownErr: errors.New("teardown unproven"), wantRunning: true, wantAuthority: true, wantTransition: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			current := engsession.Session{ID: "sess-narrow", Environment: "container", Network: "deny", Status: engsession.StatusRunning, PID: 4242}
+			var grant engsession.EgressGrant
+			var err error
+			current, grant, err = engsession.AppendGrant(current, "example.com", 443, nowForTest(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			oldGeneration, err := sessionGeneration(current)
+			if err != nil {
+				t.Fatal(err)
+			}
+			current.SetEgressRuntimeState(engsession.EgressRuntimeState{AppliedRevision: oldGeneration.Revision, AppliedHash: oldGeneration.Hash})
+			next, err := engsession.RevokeGrant(current, grant.ID, nowForTest(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			candidateGeneration, err := sessionGeneration(next)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tx := &scriptedEgressRecordTx{current: current, errors: append([]error(nil), tc.commitErrors...)}
+			applyCalls, inspectCalls, restoreCalls, teardownCalls := 0, 0, 0, 0
+			runtimeGeneration := oldGeneration
+			d := defaultDependencies()
+			d.now = func() time.Time { return nowForTest(t) }
+			d.beginEgressOverlayApply = func(context.Context, engsession.Session, []container.SessionGrant) (egressApplyEffect, error) {
+				applyCalls++
+				runtimeGeneration = candidateGeneration
+				return egressApplyEffect{inspect: func(context.Context) (container.EgressGeneration, error) {
+					inspectCalls++
+					return runtimeGeneration, nil
+				}}, nil
+			}
+			d.applyEgressOverlay = func(context.Context, engsession.Session, []container.SessionGrant) error {
+				restoreCalls++
+				runtimeGeneration = oldGeneration
+				return nil
+			}
+			d.teardownEgress = func(engsession.Session) error {
+				teardownCalls++
+				return tc.teardownErr
+			}
+
+			err = runRunningSessionNarrowProtocol(d, context.Background(), tx, current, next)
+			if !errors.Is(err, tc.wantErr) || (tc.wantErr == nil && err != nil) {
+				t.Fatalf("narrow error = %v, want %v", err, tc.wantErr)
+			}
+			if applyCalls != tc.wantApply || inspectCalls != tc.wantInspect || restoreCalls != tc.wantRestore || teardownCalls != tc.wantTeardown {
+				t.Fatalf("effects apply=%d inspect=%d restore=%d teardown=%d", applyCalls, inspectCalls, restoreCalls, teardownCalls)
+			}
+			state := tx.current.EgressRuntimeState()
+			if (tx.current.Status == engsession.StatusRunning) != tc.wantRunning || (len(tx.current.EgressGrants) == 1) != tc.wantAuthority || (state.Transition != nil) != tc.wantTransition {
+				t.Fatalf("final transaction state = %+v runtime=%+v", tx.current, state)
+			}
+		})
+	}
+}
+
 func TestSessionGrantApplySuccessWithoutPositiveInspectFailsClosed(t *testing.T) {
 	store := engsession.NewStore(t.TempDir())
 	sess, err := store.Create("pi", "container", t.TempDir(), nowForTest(t))
@@ -517,6 +599,74 @@ func TestSessionRevokeNarrowsRuntimeBeforeDurableAuthority(t *testing.T) {
 	state := updated.EgressRuntimeState()
 	if len(updated.EgressGrants) != 0 || updated.GrantRevision != 2 || state.Transition != nil || state.AppliedHash != runtimeGeneration.Hash {
 		t.Fatalf("final narrow state = %+v runtime=%+v", updated, runtimeGeneration)
+	}
+}
+
+func TestSessionRevokeRunningPreservesHistoricalUpdatedAtCompatibility(t *testing.T) {
+	store := engsession.NewStore(t.TempDir())
+	createdAt := time.Date(2026, 7, 18, 5, 0, 0, 0, time.UTC)
+	sess, err := store.Create("pi", "container", t.TempDir(), createdAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, grant, err := engsession.AppendGrant(sess, "example.com", 443, createdAt.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, runtimeGeneration := seedAppliedRunningSession(t, store, sess)
+	before := sess.UpdatedAt
+	d := installEgressSeams(t,
+		func(_ context.Context, candidate engsession.Session, _ []container.SessionGrant) error {
+			var generationErr error
+			runtimeGeneration, generationErr = sessionGeneration(candidate)
+			return generationErr
+		},
+		func(context.Context, engsession.Session) (container.EgressGeneration, error) {
+			return runtimeGeneration, nil
+		}, nil,
+	)
+	updated, err := revokeSessionEgressWithDeps(d, context.Background(), store, sess.ID, grant.ID, createdAt.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !updated.UpdatedAt.Equal(before) {
+		t.Fatalf("running revoke UpdatedAt = %v, want historical frame %v", updated.UpdatedAt, before)
+	}
+}
+
+func TestSessionRevokeApplySuccessWithoutPositiveInspectRestoresOld(t *testing.T) {
+	store := engsession.NewStore(t.TempDir())
+	sess, err := store.Create("pi", "container", t.TempDir(), nowForTest(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, grant, err := engsession.AppendGrant(sess, "example.com", 443, nowForTest(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, oldGeneration := seedAppliedRunningSession(t, store, sess)
+	applyCalls, inspectCalls := 0, 0
+	d := installEgressSeams(t,
+		func(context.Context, engsession.Session, []container.SessionGrant) error {
+			applyCalls++
+			return nil
+		},
+		func(context.Context, engsession.Session) (container.EgressGeneration, error) {
+			inspectCalls++
+			return oldGeneration, nil
+		},
+		func(engsession.Session) error { t.Fatal("known old restoration must not tear down"); return nil },
+	)
+	if _, err := revokeSessionEgressWithDeps(d, context.Background(), store, sess.ID, grant.ID, nowForTest(t)); !errors.Is(err, container.ErrEgressGenerationUncertain) {
+		t.Fatalf("revoke error = %v, want inspect uncertainty", err)
+	}
+	stored, err := store.Get(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := stored.EgressRuntimeState()
+	if applyCalls != 2 || inspectCalls != 2 || stored.Status != engsession.StatusRunning || len(stored.EgressGrants) != 1 || state.Transition != nil || state.AppliedHash != oldGeneration.Hash {
+		t.Fatalf("unacknowledged narrow restore session=%+v state=%+v apply=%d inspect=%d", stored, state, applyCalls, inspectCalls)
 	}
 }
 

@@ -1149,15 +1149,32 @@ func (a ProtocolAdapter) EffectCandidate(state ProtocolState) (Session, error) {
 	return a.Candidate(target)
 }
 
-// EffectCandidateFrom projects a later commit from the most recently committed
-// record frame. It preserves transaction revision and out-of-model metadata
-// while retaining the adapter's original concrete owner/generation bindings.
+// CandidateFrom projects a stable state from the most recently committed
+// record frame, preserving transaction revision and out-of-model metadata.
+func (a ProtocolAdapter) CandidateFrom(state ProtocolState, frame Session) (Session, error) {
+	framed, err := a.withRecordFrame(frame)
+	if err != nil {
+		return Session{}, err
+	}
+	return framed.projectCandidate(state, false)
+}
+
+// EffectCandidateFrom projects a later effect commit from the most recently
+// committed record frame while retaining the original concrete bindings.
 func (a ProtocolAdapter) EffectCandidateFrom(state ProtocolState, frame Session) (Session, error) {
+	framed, err := a.withRecordFrame(frame)
+	if err != nil {
+		return Session{}, err
+	}
+	return framed.EffectCandidate(state)
+}
+
+func (a ProtocolAdapter) withRecordFrame(frame Session) (ProtocolAdapter, error) {
 	if frame.ID != a.original.ID || frame.Status != a.original.Status || frame.PID != a.original.PID || frame.ProcessToken != a.original.ProcessToken || frame.Detached != a.original.Detached || !samePersistentAuthority(a.original, frame) || !validEgressRuntimeState(frame) {
-		return Session{}, fmt.Errorf("protocol effect candidate frame is incompatible")
+		return ProtocolAdapter{}, fmt.Errorf("protocol candidate frame is incompatible")
 	}
 	a.original = frame
-	return a.EffectCandidate(state)
+	return a, nil
 }
 
 // Candidate projects modeled durable fields back onto the original Session and
