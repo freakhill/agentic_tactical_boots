@@ -50,6 +50,13 @@ func TestCatalogListPackagesEnvelope(t *testing.T) {
 		if pkg["version"] == "" || pkg["kind"] == "" {
 			t.Fatalf("package %q missing kind/version: %#v", name, pkg)
 		}
+		availability, ok := pkg["availability"].(map[string]any)
+		if !ok || (availability["state"] != "ready" && availability["state"] != "unavailable") {
+			t.Fatalf("package %q missing availability: %#v", name, pkg["availability"])
+		}
+		if availability["state"] == "unavailable" && availability["reason"] == "" {
+			t.Fatalf("unavailable package %q missing reason: %#v", name, availability)
+		}
 	}
 	for _, want := range []string{"claude-code", "node"} {
 		if !seen[want] {
@@ -86,6 +93,13 @@ func TestCatalogListBundlesEnvelope(t *testing.T) {
 		if !ok || len(pkgs) == 0 {
 			t.Fatalf("bundle %q packages malformed: %#v", name, bundle["packages"])
 		}
+		availability, ok := bundle["availability"].(map[string]any)
+		if !ok || (availability["state"] != "ready" && availability["state"] != "unavailable") {
+			t.Fatalf("bundle %q missing availability: %#v", name, bundle["availability"])
+		}
+		if availability["state"] == "unavailable" && availability["reason"] == "" {
+			t.Fatalf("unavailable bundle %q missing reason: %#v", name, availability)
+		}
 	}
 	for _, want := range []string{"claude", "pi", "python"} {
 		if !seen[want] {
@@ -98,6 +112,18 @@ func TestCatalogListBundlesEnvelope(t *testing.T) {
 	}
 	if defaults["claude"] != "claude" || defaults["pi"] != "pi" {
 		t.Fatalf("data.defaults missing agent bundle defaults: %#v", defaults)
+	}
+	for agent, raw := range defaults {
+		bundle, ok := raw.(string)
+		if !ok {
+			t.Fatalf("default %q = %#v, want bundle name", agent, raw)
+		}
+		for _, rawBundle := range bundles {
+			entry := rawBundle.(map[string]any)
+			if entry["name"] == bundle && entry["availability"].(map[string]any)["state"] != "ready" {
+				t.Fatalf("default bundle %q for %q is not ready: %#v", bundle, agent, entry["availability"])
+			}
+		}
 	}
 }
 

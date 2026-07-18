@@ -71,6 +71,44 @@ func argPrefix(name string) string {
 	return strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
 }
 
+const (
+	RecipeAvailabilityReady       = "ready"
+	RecipeAvailabilityUnavailable = "unavailable"
+)
+
+// RecipeAvailability is the bounded, value-free readiness of one resolved image
+// selection. Its reason is limited to reviewed catalog package names and never
+// forwards filesystem, runtime, or builder errors to UI clients.
+type RecipeAvailability struct {
+	State  string `json:"state"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// RecipeAvailabilityFor reports whether enabled can produce a reviewed agent
+// image recipe without building it. It intentionally shares ResolveRecipe's
+// validation boundary while publishing only catalog-safe explanations.
+func RecipeAvailabilityFor(enabled []string) RecipeAvailability {
+	cat := policy.DefaultCatalog()
+	if pending := cat.BuildReadyFor(enabled); len(pending) > 0 {
+		if len(pending) == 1 {
+			return RecipeAvailability{State: RecipeAvailabilityUnavailable, Reason: pending[0] + " has no reviewed artifact digest"}
+		}
+		return RecipeAvailability{State: RecipeAvailabilityUnavailable, Reason: "selected packages have no reviewed artifact digest"}
+	}
+	for _, name := range enabled {
+		if !iw2BuildablePackages[name] {
+			if _, ok := cat.Lookup(name); ok {
+				return RecipeAvailability{State: RecipeAvailabilityUnavailable, Reason: name + " has no reviewed agent-image recipe"}
+			}
+			return RecipeAvailability{State: RecipeAvailabilityUnavailable, Reason: "selected package has no reviewed agent-image recipe"}
+		}
+	}
+	if _, err := ResolveRecipe(enabled); err != nil {
+		return RecipeAvailability{State: RecipeAvailabilityUnavailable, Reason: "selected packages have no reviewed agent-image recipe"}
+	}
+	return RecipeAvailability{State: RecipeAvailabilityReady}
+}
+
 // toolsBuildArgs builds the agent-image build-args from the resolved package set: BASE,
 // one ENABLE_<PKG>=true per enabled package, and that package's pinned version (+ per-arch
 // sha256 for binary kinds), all read from the in-tree catalog so the catalog stays the

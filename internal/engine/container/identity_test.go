@@ -96,6 +96,26 @@ func TestAgentImageTagsSensitiveToPackageSet(t *testing.T) {
 
 // A profile that resolves a not-yet-built package (sentinel-digest binary or an
 // unwired catalog entry) must fail fast, never silently drop the tool (specs/0058 N1).
+func TestRecipeAvailabilityClassifiesBuildableAndUnavailableSelections(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		enabled []string
+		state   string
+		reason  string
+	}{
+		{name: "buildable", enabled: []string{"node", "pi"}, state: RecipeAvailabilityReady},
+		{name: "pending digest", enabled: []string{"bun"}, state: RecipeAvailabilityUnavailable, reason: "bun has no reviewed artifact digest"},
+		{name: "unwired", enabled: []string{"eslint"}, state: RecipeAvailabilityUnavailable, reason: "eslint has no reviewed agent-image recipe"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := RecipeAvailabilityFor(tc.enabled)
+			if got.State != tc.state || got.Reason != tc.reason {
+				t.Fatalf("RecipeAvailabilityFor(%v) = %+v, want state=%q reason=%q", tc.enabled, got, tc.state, tc.reason)
+			}
+		})
+	}
+}
+
 func TestAgentImageTagsAcceptsRipgrep(t *testing.T) {
 	_, _, toolsArgs, err := agentImageTags([]string{"node", "pi", "ripgrep"})
 	if err != nil {

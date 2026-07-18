@@ -12,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/freakhill/safeslop/internal/engine/container"
 	"github.com/freakhill/safeslop/internal/engine/policy"
 	"github.com/freakhill/safeslop/internal/jsoncontract"
 )
@@ -52,6 +53,52 @@ func cmdCatalogWithDeps(d *dependencies) *cobra.Command {
 	return c
 }
 
+type catalogPackageData struct {
+	policy.Package
+	Availability container.RecipeAvailability `json:"availability"`
+}
+
+type catalogBundleData struct {
+	policy.Bundle
+	Availability container.RecipeAvailability `json:"availability"`
+}
+
+func catalogSelectionAvailability(profile policy.Profile) container.RecipeAvailability {
+	resolved, err := policy.Resolve(profile)
+	if err != nil {
+		return container.RecipeAvailability{State: container.RecipeAvailabilityUnavailable, Reason: "catalog selection cannot be resolved"}
+	}
+	return container.RecipeAvailabilityFor(resolved.IdentitySet)
+}
+
+func catalogPackageDataForList(cat *policy.Catalog) []catalogPackageData {
+	packages := cat.Packages()
+	out := make([]catalogPackageData, 0, len(packages))
+	for _, pkg := range packages {
+		out = append(out, catalogPackageData{
+			Package: pkg,
+			Availability: catalogSelectionAvailability(policy.Profile{
+				Agent: "fish", Environment: "container", BareAgent: true, Packages: []string{pkg.Name},
+			}),
+		})
+	}
+	return out
+}
+
+func catalogBundleDataForList(cat *policy.Catalog) []catalogBundleData {
+	bundles := cat.Bundles()
+	out := make([]catalogBundleData, 0, len(bundles))
+	for _, bundle := range bundles {
+		out = append(out, catalogBundleData{
+			Bundle: bundle,
+			Availability: catalogSelectionAvailability(policy.Profile{
+				Agent: "fish", Environment: "container", BareAgent: true, Bundles: []string{bundle.Name},
+			}),
+		})
+	}
+	return out
+}
+
 func cmdCatalogList() *cobra.Command {
 	var output string
 	var bundles bool
@@ -65,10 +112,10 @@ func cmdCatalogList() *cobra.Command {
 			}
 			cat := policy.DefaultCatalog()
 			if bundles {
-				emitContract(jsoncontract.OK(map[string]any{"bundles": cat.Bundles(), "defaults": cat.Defaults()}))
+				emitContract(jsoncontract.OK(map[string]any{"bundles": catalogBundleDataForList(cat), "defaults": cat.Defaults()}))
 				return nil
 			}
-			emitContract(jsoncontract.OK(map[string]any{"packages": cat.Packages()}))
+			emitContract(jsoncontract.OK(map[string]any{"packages": catalogPackageDataForList(cat)}))
 			return nil
 		},
 	}
