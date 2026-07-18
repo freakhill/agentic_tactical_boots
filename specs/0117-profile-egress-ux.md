@@ -49,7 +49,7 @@ The catalog composer renders selections whose resolved image cannot be built, th
   VERIFY:   `go test ./internal/engine/container -run 'Compose.*Proxy|DenyTier|DNS' -count=1 -v && make check-assets`
   EXPECTED: Rendered deny Compose has matching upper/lower proxy variables, raw DNS remains pinned, and no open egress path is added.
 
-- [ ] T4 — Add live terminal egress visibility and review shortcut
+- [x] T4 — Add live terminal egress visibility and review shortcut
   FILE:     `emacs/safeslop-session-terminal.el`, `emacs/safeslop-egress.el` only if a narrow terminal-facing helper is required, `emacs/test/safeslop-test.el`
   CHANGE:   Add a buffer-local, bounded read-only observation monitor for live container-deny terminals. Refresh terminal header/mode-line count asynchronously without stealing focus; prevent concurrent requests; cancel its timer when the process/buffer exits; ignore late callbacks for dead/reused buffers. Include a literal discoverable `C-c C-v` review hint whenever the session is eligible. Bind that key in both term and eat backends to invoke the existing explicit session egress review with the terminal session id/snapshot. Never invoke review, grant, dismiss, persistent preview, or a prompt from monitor callbacks.
   VERIFY:   `make test-emacs EMACS=$(command -v emacs)`

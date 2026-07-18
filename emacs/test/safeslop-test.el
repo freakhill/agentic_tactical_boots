@@ -1396,6 +1396,47 @@ ref/value/staged path is still refused (mirrors the portal T2 guarantee)."
     (dolist (leak '("op://" "env:" "TOKEN"))
       (should-not (string-match-p (regexp-quote leak) header)))))
 
+(ert-deftest safeslop-test-session-terminal-egress-chrome-is-prominent-and-value-free ()
+  "Container-deny terminals show only the pending count and review shortcut."
+  (with-temp-buffer
+    (let ((data '((session_id . "sess-1") (environment . "container") (network . "deny"))))
+      (setq-local safeslop-session-terminal-data data)
+      (setq-local safeslop-session-egress-pending-count 3)
+      (setq header-line-format (safeslop-session--header-line data))
+      (safeslop-session--install-safety-chrome data))
+    (should (string-match-p "egress:3 denied" safeslop-session-safety-chrome))
+    (should (string-match-p "C-c C-v review" safeslop-session-safety-chrome))
+    (should (string-match-p "Egress: 3 denied" (format "%s" header-line-format)))))
+
+(ert-deftest safeslop-test-session-terminal-egress-monitor-is-read-only ()
+  "An observation callback updates chrome but never opens review or mutates authority."
+  (let (callback popped)
+    (with-temp-buffer
+      (setq-local safeslop-session-id "sess-1")
+      (setq-local safeslop-session-terminal-data
+                  '((session_id . "sess-1") (environment . "container") (network . "deny")))
+      (cl-letf (((symbol-function 'safeslop-session-egress-observations)
+                 (lambda (_id cb _quiet) (setq callback cb)))
+                ((symbol-function 'pop-to-buffer) (lambda (&rest _) (setq popped t))))
+        (safeslop-session--terminal-egress-refresh)
+        (funcall callback (safeslop-contract-parse-string
+                           "{\"schema_version\":1,\"ok\":true,\"data\":{\"pending_count\":2},\"warnings\":[],\"errors\":[]}")))
+      (should (string-match-p "egress:2 denied" safeslop-session-safety-chrome))
+      (should-not popped))))
+
+(ert-deftest safeslop-test-session-terminal-egress-review-needs-explicit-shortcut ()
+  "Only the terminal shortcut opens the existing explicit review."
+  (let (reviewed)
+    (with-temp-buffer
+      (setq-local safeslop-session-id "sess-1")
+      (setq-local safeslop-session-terminal-data
+                  '((session_id . "sess-1") (environment . "container") (network . "deny")))
+      (safeslop-session--install-egress-review-key)
+      (cl-letf (((symbol-function 'safeslop-session-egress-review)
+                 (lambda (id data) (setq reviewed (list id data)))))
+        (call-interactively (lookup-key (current-local-map) (kbd "C-c C-v"))))
+      (should (equal (car reviewed) "sess-1")))))
+
 (ert-deftest safeslop-test-session-safety-chrome-is-color-redundant-and-value-free ()
   "Safety chrome keeps literal posture words, reinforces them with existing faces,
 and exposes only the defensive value-free credential summary in help text."
@@ -1467,9 +1508,10 @@ buffer-local id after terminal creation, and installs a value-free creds header.
             (should (equal safeslop-session-id "sess-xyz"))
             (should (stringp header-line-format))
             (should (string-match-p "creds: github acme/web app rw" header-line-format))
+            (should (string-match-p "Egress: 0 denied (C-c C-v review)" header-line-format))
             (should-not (string-match-p "op://\\|env:\\|/home/me" header-line-format))
             (should (equal (substring-no-properties safeslop-session-safety-chrome)
-                           "safeslop[container/deny creds:1]"))
+                           "safeslop[container/deny creds:1] egress:0 denied — C-c C-v review"))
             (should (= (cl-count 'safeslop-session-safety-chrome mode-line-format) 1))))
       (when (buffer-live-p buf) (kill-buffer buf)))))
 

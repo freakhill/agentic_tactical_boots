@@ -26,6 +26,10 @@
 (declare-function safeslop-portal "safeslop-portal" ())
 (declare-function safeslop-session-detail "safeslop-session" (&optional session-id data))
 (declare-function safeslop-session--read-id "safeslop-session" (prompt))
+(declare-function safeslop-session-egress-observations "safeslop-session"
+                  (&optional session-id callback quiet))
+(declare-function safeslop-session-egress-review "safeslop-session"
+                  (&optional session-id session-data))
 (declare-function eat-mode "eat" ())
 (declare-function eat-exec "eat" (buffer name command startfile switches))
 (defvar eat-term-name)
@@ -151,6 +155,21 @@ sole addressing handle; the buffer name is a pure, renamable label.")
 The symbol itself is installed in `mode-line-format', so refreshing this value
 updates the segment without replacing terminal-mode or user entries.")
 
+(defconst safeslop-session--egress-monitor-interval 2
+  "Seconds between read-only pending-denial checks in an eligible terminal.")
+
+(defvar-local safeslop-session-terminal-data nil
+  "Value-free session snapshot used for terminal posture and egress review.")
+
+(defvar-local safeslop-session-egress-pending-count 0
+  "Last observed value-free count of pending denied destinations.")
+
+(defvar-local safeslop-session-egress-monitor-timer nil
+  "Read-only terminal observation timer, or nil outside a deny session.")
+
+(defvar-local safeslop-session-egress-monitor-in-flight nil
+  "Non-nil while this terminal has one observation request outstanding.")
+
 (defun safeslop-session--cell-help (cell)
   "Return CELL's help text, or nil when it has none."
   (and (stringp cell) (get-text-property 0 'help-echo cell)))
@@ -177,10 +196,20 @@ the dashboards.  Credential text uses the defensive 0086 scope formatter."
            (format "credentials: %s" (safeslop-session--creds-summary data)))
      " · ")))
 
+(defun safeslop-session--terminal-egress-eligible-p (data)
+  "Return non-nil when DATA supports explicit progressive egress review."
+  (and (listp data)
+       (equal (alist-get 'environment data) "container")
+       (equal (alist-get 'network data) "deny")))
+
+(defun safeslop-session--terminal-egress-summary (data)
+  "Return a value-free terminal egress posture only for retained terminal DATA."
+  (when (and (equal data safeslop-session-terminal-data)
+             (safeslop-session--terminal-egress-eligible-p data))
+    (format " egress:%d denied — C-c C-v review" safeslop-session-egress-pending-count)))
+
 (defun safeslop-session--safety-chrome (data)
-  "Return a persistent, color-redundant mode-line segment for session DATA.
-Literal environment/network words remain readable without color; the existing
-shared faces reinforce them.  Help text expands the same value-free posture."
+  "Return a persistent, color-redundant mode-line segment for session DATA."
   (let* ((env (or (safeslop-session--safe-display-field
                    (safeslop-session--field data 'environment))
                   "unknown"))
@@ -192,7 +221,8 @@ shared faces reinforce them.  Help text expands the same value-free posture."
                          (safeslop-surface--env-cell env) "/"
                          (safeslop-surface--net-cell net)
                          " creds:" (if (> count 0) (number-to-string count) "none")
-                         "]")))
+                         "]"
+                         (or (safeslop-session--terminal-egress-summary data) ""))))
     (add-text-properties 0 (length chrome)
                          (list 'help-echo (safeslop-session--posture-help data))
                          chrome)
@@ -210,6 +240,71 @@ copy of the terminal mode's existing format remains after it."
     (unless (memq 'safeslop-session-safety-chrome format)
       (setq-local mode-line-format
                   (cons 'safeslop-session-safety-chrome format)))))
+
+(defun safeslop-session--refresh-terminal-posture ()
+  "Refresh this terminal's header and mode line from its retained safe snapshot."
+  (when safeslop-session-terminal-data
+    (setq header-line-format (safeslop-session--header-line safeslop-session-terminal-data))
+    (safeslop-session--install-safety-chrome safeslop-session-terminal-data)
+    (force-mode-line-update t)))
+
+(defun safeslop-session--terminal-egress-refresh ()
+  "Request the pending-denial count without opening review or changing authority."
+  (when (and (safeslop-session--terminal-egress-eligible-p safeslop-session-terminal-data)
+             (stringp safeslop-session-id)
+             (not safeslop-session-egress-monitor-in-flight))
+    (let ((buffer (current-buffer))
+          (session-id safeslop-session-id))
+      (setq safeslop-session-egress-monitor-in-flight t)
+      (condition-case nil
+          (safeslop-session-egress-observations
+           session-id
+           (lambda (envelope)
+             (when (buffer-live-p buffer)
+               (with-current-buffer buffer
+                 (when (equal session-id safeslop-session-id)
+                   (setq safeslop-session-egress-monitor-in-flight nil)
+                   (let ((count (alist-get 'pending_count (safeslop-contract-data envelope))))
+                     (when (and (safeslop-contract-ok-p envelope) (integerp count))
+                       (setq safeslop-session-egress-pending-count count)
+                       (safeslop-session--refresh-terminal-posture)))))))
+           t)
+        (error (setq safeslop-session-egress-monitor-in-flight nil))))))
+
+(defun safeslop-session--stop-egress-monitor ()
+  "Cancel this terminal's read-only observation monitor."
+  (when (timerp safeslop-session-egress-monitor-timer)
+    (cancel-timer safeslop-session-egress-monitor-timer))
+  (setq safeslop-session-egress-monitor-timer nil
+        safeslop-session-egress-monitor-in-flight nil))
+
+(defun safeslop-session--start-egress-monitor ()
+  "Start a bounded read-only monitor only for this terminal's deny session."
+  (safeslop-session--stop-egress-monitor)
+  (when (safeslop-session--terminal-egress-eligible-p safeslop-session-terminal-data)
+    (let ((buffer (current-buffer))
+          (session-id safeslop-session-id))
+      (setq safeslop-session-egress-monitor-timer
+            (run-at-time 0 safeslop-session--egress-monitor-interval
+                         (lambda ()
+                           (when (buffer-live-p buffer)
+                             (with-current-buffer buffer
+                               (if (equal session-id safeslop-session-id)
+                                   (safeslop-session--terminal-egress-refresh)
+                                 (safeslop-session--stop-egress-monitor)))))))
+      (add-hook 'kill-buffer-hook #'safeslop-session--stop-egress-monitor nil t))))
+
+(defun safeslop-session--terminal-egress-review ()
+  "Open the existing review only after an explicit terminal shortcut."
+  (interactive)
+  (unless (and (stringp safeslop-session-id)
+               (safeslop-session--terminal-egress-eligible-p safeslop-session-terminal-data))
+    (user-error "Progressive egress review is only available for container deny sessions"))
+  (safeslop-session-egress-review safeslop-session-id safeslop-session-terminal-data))
+
+(defun safeslop-session--install-egress-review-key ()
+  "Bind the explicit terminal egress-review shortcut in the local terminal map."
+  (local-set-key (kbd "C-c C-v") #'safeslop-session--terminal-egress-review))
 
 (defconst safeslop-session--creds-unsafe-patterns
   '("op://" "\\benv:" "private[-_ ]?key" "begin .*key" "\\btoken\\b" "\\`[~/]")
@@ -308,15 +403,18 @@ portal legacy lookup still finds it (specs/0086 T3)."
               (or (safeslop-session--safe-display-field session-id) "unknown")))))
 
 (defun safeslop-session--header-line (data)
-  "Return the value-free header-line summary string for session DATA.
-Restates profile/project/tier/net (the buffer label shape) and appends the
-value-free credential-scope list as `creds: ...'
-(or `creds: \u2014' for old records
-and credential-less sessions).  Never includes token values, secret refs,
-staged paths, or key refs (specs/0086 T3)."
+  "Return a value-free header-line summary string for session DATA.
+Eligible terminals include only the pending-denial count and review shortcut,
+never a destination, request path, credential value, reference, or stage path."
   (let ((label (safeslop-session--buffer-label
                 (or (safeslop-session--field data 'session_id) "") data)))
-    (format "%s  creds: %s" label (safeslop-session--creds-summary data))))
+    (string-join
+     (delq nil
+           (list (format "%s  creds: %s" label (safeslop-session--creds-summary data))
+                 (when (and (equal data safeslop-session-terminal-data)
+                            (safeslop-session--terminal-egress-eligible-p data))
+                   (format "Egress: %d denied (C-c C-v review)" safeslop-session-egress-pending-count))))
+     "  ")))
 
 (defun safeslop-session--fetch-data (session-id)
   "Return SESSION-ID's `session status' data alist, best effort, or nil.
@@ -456,10 +554,13 @@ fallback (`safeslop-session-status-fallback')."
     (with-current-buffer buf
       (setq-local safeslop-session-id session-id)
       (when data
+        (setq-local safeslop-session-terminal-data data)
         (setq header-line-format (safeslop-session--header-line data))
-        (safeslop-session--install-safety-chrome data)))
+        (safeslop-session--install-safety-chrome data)
+        (safeslop-session--install-egress-review-key)))
     (let ((proc (get-buffer-process buf)))
       (when proc
+        (with-current-buffer buf (safeslop-session--start-egress-monitor))
         ;; Capture raw stdout ahead of term's renderer, then key on it when the
         ;; process exits.  add-function (not set-process-*) preserves term's own
         ;; filter/sentinel so the PTY keeps working on the happy path.
@@ -473,6 +574,8 @@ fallback (`safeslop-session-status-fallback')."
         (add-function :after (process-sentinel proc)
                       (lambda (p _event)
                         (unless (process-live-p p)
+                          (when (buffer-live-p buf)
+                            (with-current-buffer buf (safeslop-session--stop-egress-monitor)))
                           (unless (or (safeslop-session--maybe-status-fallback buf session-id)
                                       (zerop (process-exit-status p)))
                             (safeslop-session--report-terminal-failure session-id))))))

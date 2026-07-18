@@ -392,6 +392,7 @@ envelope via the callback, never a crash."
 The argv log proves the terminal subprocess starts only after status+doctor."
   (let* ((status-argv '("session" "status" "--session-id" "sess-term" "--output" "json"))
          (doctor-argv '("doctor" "--json"))
+         (obs-argv '("session" "egress" "observations" "--session-id" "sess-term" "--output" "json"))
          (argv '("session" "run" "--session-id" "sess-term"))
          (routes `((,(safeslop-test--json-key status-argv) .
                    ((stdout . ,(concat "{\"schema_version\":1,\"ok\":true,\"data\":"
@@ -417,6 +418,7 @@ The argv log proves the terminal subprocess starts only after status+doctor."
         (should (equal (safeslop-test--argv-log-lines)
                        (list (safeslop-test--json-key status-argv)
                              (safeslop-test--json-key doctor-argv)
+                             (safeslop-test--json-key obs-argv)
                              (safeslop-test--json-key argv))))))))
 
 (ert-deftest safeslop-test-session-run-detached-args ()
@@ -533,6 +535,7 @@ The argv log proves the terminal subprocess starts only after status+doctor."
 (ert-deftest safeslop-test-session-reattach-skips-runtime-preflight ()
   "Reattach uses the existing supervisor socket and does not run doctor preflight."
   (let* ((status-argv '("session" "status" "--session-id" "sess-reattach" "--output" "json"))
+         (obs-argv '("session" "egress" "observations" "--session-id" "sess-reattach" "--output" "json"))
          (argv '("session" "attach" "--session-id" "sess-reattach"))
          (routes `((,(safeslop-test--json-key status-argv) .
                    ((stdout . ,(concat "{\"schema_version\":1,\"ok\":true,\"data\":"
@@ -552,6 +555,7 @@ The argv log proves the terminal subprocess starts only after status+doctor."
               (accept-process-output proc 0.1))))
         (should (equal (safeslop-test--argv-log-lines)
                        (list (safeslop-test--json-key status-argv)
+                             (safeslop-test--json-key obs-argv)
                              (safeslop-test--json-key argv))))))))
 
 (ert-deftest safeslop-test-fallback-compilation-mode-on-pty-unavailable ()
