@@ -1,6 +1,6 @@
 # 0119 — GitHub App repository discovery picker
 
-Status: in progress
+Status: implemented and accepted
 
 SCOPE: add an explicit host-side, metadata-only GitHub App installation repository discovery command and use it as searchable suggestions in the Emacs Credentials `R` assignment flow, while preserving manual entry, full profile-scope replacement confirmation, policy re-trust, and launch-time authorization.
 
@@ -46,7 +46,7 @@ DECISIONS: `specs/research/2026-07-18-github-repository-discovery-ayo.md` and `s
   VERIFY:   `git diff --check && rg -n 'creds repositories|metadata(:|-)read|linked App|one hour|manual|re-trust|launch.*authoritative|Forgejo.*deferred|0119' README.md emacs/README.md skills/agent-{key-lifecycle,sandbox-ops}/SKILL.md specs/0090-credential-connection-repo-picker.md specs/0119-github-repository-discovery.md`
   EXPECTED: Command exits 0; docs/skills describe real commands and distinguish discovery, policy scope, account links, runtime credentials, and authorization.
 
-- [ ] T7 — Run final review, full gates, install, and a value-free live smoke
+- [x] T7 — Run final review, full gates, install, and a value-free live smoke
   FILE:     whole repository; installed `~/.local/bin/safeslop` and `~/.local/share/safeslop/emacs/*.el`
   CHANGE:   Obtain blocking-only review, run focused and full checks on the accepted tree, build/install, verify installed files/version, then invoke discovery once against the already-linked healthy GitHub App while redirecting JSON to a private temp file and report only envelope status/repository count (never names/values). Mark complete only after all gates and cleanup succeed.
   VERIFY:   `git diff --check && make test-emacs-ui-matrix && make check && make build`
