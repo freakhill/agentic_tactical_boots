@@ -509,12 +509,17 @@ edits a profile policy."
 The observation query is asynchronous and never steals focus when it completes."
   (interactive (list (safeslop-session--read-id "Review denied egress for session: ") nil))
   (let ((buf (safeslop-session--open-review-buffer
-              "*safeslop egress review*" (format "Progressive egress review — session %s" session-id)
-              "Loading passive denied destinations; no network authority will change.")))
-    (safeslop-session-egress-observations
-     session-id
-     (lambda (envelope) (safeslop-session--review-render session-id session-data envelope buf))
-     t)))
+              "*safeslop egress review*"
+              (format "Progressive egress review — session %s" session-id)
+              "Loading passive denied destinations; no network authority will change."
+              #'safeslop-egress-review-mode)))
+    (with-current-buffer buf
+      (setq safeslop-egress-review-session-id session-id
+            safeslop-egress-review-session-data session-data
+            safeslop-egress-review-status "Loading passive denied destinations…"
+            safeslop-egress-review-status-face 'shadow
+            safeslop-egress-review-action-in-flight nil)
+      (safeslop-egress-review--request-observations))))
 
 ;;;###autoload
 (defun safeslop-session-remove (&optional session-id callback quiet)
@@ -594,6 +599,64 @@ the portal so row actions refresh in place instead of stealing the window."
          (safeslop--show-envelope-buffer "*safeslop session rename*" args envelope))
        (when callback (funcall callback envelope))))))
 
+(defvar-local safeslop-session-detail-session-id nil
+  "Session id addressed by the current session-detail buffer.")
+
+(defvar-local safeslop-session-detail-data nil
+  "Value-free session snapshot rendered by the current detail buffer.")
+
+(defvar safeslop-session-detail-mode-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map safeslop-output-mode-map)
+    (define-key map (kbd "v") #'safeslop-session-detail-egress-review)
+    (define-key map (kbd "o") #'safeslop-session-detail-egress-observations)
+    (define-key map (kbd "G") #'safeslop-session-detail-egress-grants)
+    (define-key map (kbd "+") #'safeslop-session-detail-egress-grant)
+    (define-key map (kbd "-") #'safeslop-session-detail-egress-revoke)
+    map)
+  "Keymap for value-free session-detail buffers.")
+
+(define-derived-mode safeslop-session-detail-mode safeslop-output-mode
+  "safeslop-session-detail"
+  "Major mode for a session's value-free detail and explicit controls.")
+
+(defun safeslop-session-detail--id ()
+  "Return this detail buffer's session id, or signal clearly."
+  (or safeslop-session-detail-session-id
+      (user-error "This detail buffer has no session id")))
+
+(defun safeslop-session-detail-egress-review ()
+  "Open denied-egress review for this detail buffer's session."
+  (interactive)
+  (unless (safeslop-session--terminal-egress-eligible-p safeslop-session-detail-data)
+    (user-error "Progressive egress review is only available for container deny sessions"))
+  (safeslop-session-egress-review
+   (safeslop-session-detail--id) safeslop-session-detail-data))
+
+(defun safeslop-session-detail-egress-observations ()
+  "Show denied-egress observations for this detail buffer's session."
+  (interactive)
+  (safeslop-session-egress-observations (safeslop-session-detail--id)))
+
+(defun safeslop-session-detail-egress-grants ()
+  "Show active egress grants for this detail buffer's session."
+  (interactive)
+  (safeslop-session-egress-grants (safeslop-session-detail--id)))
+
+(defun safeslop-session-detail-egress-grant ()
+  "Prompt for and explicitly grant egress to this detail buffer's session."
+  (interactive)
+  (safeslop-session-egress-grant
+   (safeslop-session-detail--id)
+   (read-string "Exact FQDN: ")
+   (read-number "Port (80 or 443): " 443)))
+
+(defun safeslop-session-detail-egress-revoke ()
+  "Prompt for and explicitly revoke a grant from this detail buffer's session."
+  (interactive)
+  (safeslop-session-egress-revoke
+   (safeslop-session-detail--id) (read-string "Grant id: ")))
+
 (defun safeslop-session--detail-format (data)
   "Return a human-readable, faced detail view for session DATA."
   (cl-labels ((field (k) (let ((v (alist-get k data)))
@@ -655,8 +718,10 @@ the portal so row actions refresh in place instead of stealing the window."
   (if data
       (let ((buf (get-buffer-create (format "*safeslop session %s*" session-id))))
         (with-current-buffer buf
-          (safeslop-output-mode)
-          (setq safeslop-output--args (list "session" "status" "--session-id" session-id "--output" "json")
+          (safeslop-session-detail-mode)
+          (setq safeslop-session-detail-session-id session-id
+                safeslop-session-detail-data data
+                safeslop-output--args (list "session" "status" "--session-id" session-id "--output" "json")
                 safeslop-output--buffer-name (buffer-name))
           ;; Refresh (raw `g' / Evil `gr') re-renders this faced detail view;
           ;; the generic output path would degrade it to the raw envelope dump
@@ -672,14 +737,9 @@ the portal so row actions refresh in place instead of stealing the window."
                      (equal (alist-get 'network data) "deny"))
                 (insert "\nEgress review: checking passive denied destinations…\n")
               (insert "\nEgress review: unavailable outside container + deny\n"))
-            ;; Detail-buffer keys are explicit operator controls. Proxy traffic
-            ;; never calls them, so observations remain non-modal and grants
-            ;; cannot be created by agent activity alone (specs/0097).
-            (local-set-key (kbd "v") (lambda () (interactive) (safeslop-session-egress-review session-id data)))
-            (local-set-key (kbd "o") (lambda () (interactive) (safeslop-session-egress-observations session-id)))
-            (local-set-key (kbd "G") (lambda () (interactive) (safeslop-session-egress-grants session-id)))
-            (local-set-key (kbd "+") (lambda () (interactive) (safeslop-session-egress-grant session-id)))
-            (local-set-key (kbd "-") (lambda () (interactive) (safeslop-session-egress-revoke session-id)))
+            ;; Detail-mode commands are explicit operator controls. Proxy
+            ;; traffic never calls them, so observations remain non-modal and
+            ;; grants cannot be created by agent activity alone (specs/0097).
             (goto-char (point-min))))
         (pop-to-buffer buf)
         ;; This read-only follow-up is intentionally after the operator-opened

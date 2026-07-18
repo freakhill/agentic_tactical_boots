@@ -170,6 +170,12 @@ updates the segment without replacing terminal-mode or user entries.")
 (defvar-local safeslop-session-egress-monitor-in-flight nil
   "Non-nil while this terminal has one observation request outstanding.")
 
+(defface safeslop-session-egress-denied
+  '((t :inherit warning :weight bold))
+  "Face for a nonzero pending denied-request count in live session chrome.
+Literal REQUESTS DENIED text remains the primary signal; this face is redundant."
+  :group 'safeslop)
+
 (defun safeslop-session--cell-help (cell)
   "Return CELL's help text, or nil when it has none."
   (and (stringp cell) (get-text-property 0 'help-echo cell)))
@@ -202,11 +208,29 @@ the dashboards.  Credential text uses the defensive 0086 scope formatter."
        (equal (alist-get 'environment data) "container")
        (equal (alist-get 'network data) "deny")))
 
+(defun safeslop-session--terminal-egress-count-label (compact)
+  "Return the value-free pending-denial label, compact when COMPACT is non-nil."
+  (let ((count safeslop-session-egress-pending-count))
+    (if (> count 0)
+        (propertize
+         (if compact
+             (format "EGRESS: %d REQUEST%s DENIED" count (if (= count 1) "" "S"))
+           (format "EGRESS: %d REQUEST%s DENIED" count (if (= count 1) "" "S")))
+         'face 'safeslop-session-egress-denied)
+      (if compact
+          "egress:0 denied"
+        "Egress: 0 requests denied"))))
+
+(defun safeslop-session--terminal-egress-review-hint ()
+  "Return the explicit terminal review shortcut with redundant key facing."
+  (concat (propertize "C-c C-v" 'face 'help-key-binding) " review"))
+
 (defun safeslop-session--terminal-egress-summary (data)
   "Return a value-free terminal egress posture only for retained terminal DATA."
   (when (and (equal data safeslop-session-terminal-data)
              (safeslop-session--terminal-egress-eligible-p data))
-    (format " egress:%d denied — C-c C-v review" safeslop-session-egress-pending-count)))
+    (concat " " (safeslop-session--terminal-egress-count-label t) " — "
+            (safeslop-session--terminal-egress-review-hint))))
 
 (defun safeslop-session--safety-chrome (data)
   "Return a persistent, color-redundant mode-line segment for session DATA."
@@ -302,9 +326,21 @@ copy of the terminal mode's existing format remains after it."
     (user-error "Progressive egress review is only available for container deny sessions"))
   (safeslop-session-egress-review safeslop-session-id safeslop-session-terminal-data))
 
+(defvar safeslop-session-terminal-egress-control-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c C-v") #'safeslop-session--terminal-egress-review)
+    map)
+  "Buffer-local terminal control map for explicit denied-egress review.")
+
+(define-minor-mode safeslop-session-terminal-egress-control-mode
+  "Expose explicit safeslop terminal controls without mutating terminal maps."
+  :init-value nil
+  :lighter nil
+  :keymap safeslop-session-terminal-egress-control-mode-map)
+
 (defun safeslop-session--install-egress-review-key ()
-  "Bind the explicit terminal egress-review shortcut in the local terminal map."
-  (local-set-key (kbd "C-c C-v") #'safeslop-session--terminal-egress-review))
+  "Enable the buffer-local terminal egress-review shortcut."
+  (safeslop-session-terminal-egress-control-mode 1))
 
 (defconst safeslop-session--creds-unsafe-patterns
   '("op://" "\\benv:" "private[-_ ]?key" "begin .*key" "\\btoken\\b" "\\`[~/]")
@@ -413,7 +449,8 @@ never a destination, request path, credential value, reference, or stage path."
            (list (format "%s  creds: %s" label (safeslop-session--creds-summary data))
                  (when (and (equal data safeslop-session-terminal-data)
                             (safeslop-session--terminal-egress-eligible-p data))
-                   (format "Egress: %d denied (C-c C-v review)" safeslop-session-egress-pending-count))))
+                   (concat (safeslop-session--terminal-egress-count-label nil)
+                           " (" (safeslop-session--terminal-egress-review-hint) ")"))))
      "  ")))
 
 (defun safeslop-session--fetch-data (session-id)

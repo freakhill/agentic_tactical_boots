@@ -15,10 +15,11 @@
 ;; the action keys as motions/edits).  The four hand-maintained binding blocks
 ;; this replaces drifted more than once — edit the tables, not copies.
 ;;
-;; Motion discipline (specs/0063 F1): the tables never bind keys Evil users
-;; read as motions/searches — j k g n f a stay free (so j/k, gg/G, /-then-n,
-;; f, and a all work); refresh rides `gr' and the portal auto-refresh toggle
-;; `ga', per evil-collection convention.
+;; Motion discipline (specs/0063 F1): dashboard tables do not bind keys Evil
+;; users read as motions/searches — j k g n f a stay free; refresh rides `gr'
+;; and the portal auto-refresh toggle `ga'. Dedicated egress-review modes are
+;; the deliberate exception: their literal, safety-relevant `a'/`k'/`A'/`g'
+;; controls must match the in-buffer legend in every editor state.
 
 ;;; Code:
 
@@ -65,6 +66,24 @@ so mode-specific actions may override shared help/quit where needed.")
   '((safeslop-output-mode safeslop-output-mode-map
      ("gr" . safeslop-output-refresh)
      ("e" . safeslop-show-last-error))
+    (safeslop-session-detail-mode safeslop-session-detail-mode-map
+     ("v"  . safeslop-session-detail-egress-review)
+     ("o"  . safeslop-session-detail-egress-observations)
+     ("G"  . safeslop-session-detail-egress-grants)
+     ("+"  . safeslop-session-detail-egress-grant)
+     ("-"  . safeslop-session-detail-egress-revoke)
+     ("gr" . safeslop-output-refresh))
+    (safeslop-egress-review-mode safeslop-egress-review-mode-map
+     ("a"         . safeslop-egress-review-allow-now)
+     ("k"         . safeslop-egress-review-keep-denied)
+     ("A"         . safeslop-egress-review-always-allow)
+     ("g"         . safeslop-egress-review-refresh)
+     ("TAB"       . safeslop-egress-review-next)
+     ("<backtab>" . safeslop-egress-review-previous)
+     ("q"         . quit-window))
+    (safeslop-profile-egress-review-mode safeslop-profile-egress-review-mode-map
+     ("a" . safeslop-profile-egress-review-add)
+     ("q" . quit-window))
     (safeslop-portal-mode safeslop-portal-mode-map
      ("RET" . safeslop-portal-open)
      ("o"   . safeslop-portal-open)
@@ -111,9 +130,11 @@ so mode-specific actions may override shared help/quit where needed.")
      ("gr"  . safeslop-credentials-inspect-refresh)
      ("q"   . quit-window)))
   "Per-mode Evil normal-state actions: (MODE MAP-SYMBOL (KEY . COMMAND)...).
-Every listed mode also receives `safeslop-doom--evil-shared-keys'.  Keys that
-would shadow Evil motions (j k g n f a) are deliberately absent (specs/0063
-F1); `gr'/`ga' carry refresh and the portal auto-refresh toggle instead.")
+Every listed mode also receives `safeslop-doom--evil-shared-keys'. Dashboard
+modes avoid Evil motion keys (specs/0063 F1); the dedicated egress-review modes
+intentionally override their documented action keys so safety controls do not
+silently resolve to editing commands. `gr'/`ga' carry ordinary dashboard
+refresh and the portal auto-refresh toggle.")
 
 (with-eval-after-load 'evil
   (dolist (entry safeslop-doom--evil-mode-keys)

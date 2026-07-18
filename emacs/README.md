@@ -127,20 +127,29 @@ A tokenless legacy record gets the grace period but no unverified escalation.
 
 For a `container` + `deny` session, the details buffer performs an asynchronous,
 passive denied-destination count; it never focuses a buffer or changes authority
-when proxy traffic arrives. Press `v` to open the operator review: it renders
-only value-free FQDN:port/count/time/grantability rows. At a row, `a` explicitly
-**Allows now** for this session, `k` **Keeps denied** without authority, and `A`
-opens a separate hash-checked persistent-rule/CUE-delta review. On a running
-session, a grant that adds a session-grant row or a revoke that removes one
-replaces the proxy and succeeds only after the exact grant generation and overlay
-hash are acknowledged; created
-sessions persist changes for launch. If authority cannot be proven, Emacs shows the
-engine's `network_authority_uncertain` failure and further egress changes remain
-blocked until stop/reap. Its `a` key is a second, explicit write for future
-sessions only; after it succeeds, review and re-trust the changed policy before
-creating a new session. The profile composer labels container deny **Deny
-(progressive review)** as a workflow cue, never as an authorization. No proxy
-event opens a prompt, focuses a review buffer, edits CUE, or grants access.
+when proxy traffic arrives. Its `v` route and the live terminal's `C-c C-v` route
+work in raw Emacs and Evil/Doom. The terminal header and mode line contain only
+the pending count and shortcut, never destinations; a nonzero count appears as
+literal **`EGRESS: N REQUESTS DENIED`** text with a theme-aware warning face as a
+redundant signal.
+
+The operator review renders only value-free FQDN:port/count/time/grantability
+rows and starts point on the first destination. `TAB`/`S-TAB` moves between rows.
+At a row, `a` explicitly **Allows now** for this session, `k` **Keeps denied**
+without authority, and `A` opens a separate hash-checked
+persistent-rule/CUE-delta review. Allow/keep displays an in-buffer progress/result
+line and refreshes the same buffer after success; retry the original request after
+Allow now. On a running session, a grant that adds a session-grant row or a revoke
+that removes one replaces the proxy and succeeds only after the exact grant
+generation and overlay hash are acknowledged; created sessions persist changes
+for launch. If authority cannot be proven, Emacs reports that no authority change
+was confirmed; the engine's durable `network_authority_uncertain` state blocks
+further egress changes until stop/reap. The persistent review's `a` is a second,
+explicit write for future sessions only; after it succeeds, review and re-trust
+the changed policy before creating a new session. The profile composer labels
+container deny **Deny (progressive review)** as a workflow cue, never as an
+authorization. No proxy event opens a prompt, focuses a review buffer, edits CUE,
+or grants access.
 
 Creating a new ad-hoc host session (`c` / `safeslop-session-new` with
 environment `host`) asks an explicit yes/no host acknowledgement before passing

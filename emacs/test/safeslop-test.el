@@ -50,7 +50,7 @@
               (memq (safeslop-doom-bind-leader) '(t nil)))))
 
 (ert-deftest safeslop-test-output-mode-has-evil-normal-bindings ()
-  "Evil tables enter normal state, carry gr/ga, and never shadow motions.
+  "Evil tables preserve dashboard motions and bind dedicated review actions.
 The evil-define-key* stub RECORDS bindings instead of defining them into the
 real maps: defining `gr' would turn the raw `g' refresh binding into a prefix."
   (let (initial-states bindings)
@@ -67,6 +67,9 @@ real maps: defining `gr' would turn the raw `g' refresh binding into a prefix."
       ;; All read-only/operator surfaces, including the Profiles compose buffer,
       ;; enter Evil normal state so local action keys beat Evil motions.
       (should (member '(safeslop-output-mode normal) initial-states))
+      (should (member '(safeslop-session-detail-mode normal) initial-states))
+      (should (member '(safeslop-egress-review-mode normal) initial-states))
+      (should (member '(safeslop-profile-egress-review-mode normal) initial-states))
       (should (member '(safeslop-portal-mode normal) initial-states))
       (should (member '(safeslop-profiles-compose-mode normal) initial-states))
       ;; Refresh rides gr, the portal auto-toggle ga (evil-collection style);
@@ -84,9 +87,25 @@ real maps: defining `gr' would turn the raw `g' refresh binding into a prefix."
       (should (member (list safeslop-output-mode-map "d" #'safeslop-doctor) bindings))
       (should (member (list safeslop-output-mode-map "E" #'safeslop-show-last-error) bindings))
       (should (member (list safeslop-output-mode-map "q" #'quit-window) bindings))
-      ;; specs/0063 F1: no Evil table binds a bare motion/search key.
-      (dolist (motion '("j" "k" "g" "n" "f" "a"))
-        (should-not (cl-find-if (lambda (b) (equal (nth 1 b) motion)) bindings))))))
+      ;; The review legend is editor-state invariant: these safety actions are
+      ;; the narrow exception to the dashboard motion discipline.
+      (should (member (list safeslop-egress-review-mode-map "a"
+                            #'safeslop-egress-review-allow-now) bindings))
+      (should (member (list safeslop-egress-review-mode-map "k"
+                            #'safeslop-egress-review-keep-denied) bindings))
+      (should (member (list safeslop-egress-review-mode-map "g"
+                            #'safeslop-egress-review-refresh) bindings))
+      (should (member (list safeslop-profile-egress-review-mode-map "a"
+                            #'safeslop-profile-egress-review-add) bindings))
+      ;; specs/0063 F1: ordinary dashboards still bind no bare motion/search key.
+      (let ((review-maps (list safeslop-egress-review-mode-map
+                               safeslop-profile-egress-review-mode-map)))
+        (dolist (motion '("j" "k" "g" "n" "f" "a"))
+          (should-not
+           (cl-find-if (lambda (binding)
+                         (and (not (memq (car binding) review-maps))
+                              (equal (nth 1 binding) motion)))
+                       bindings)))))))
 
 ;;; safeslop-test.el ends here
 
@@ -1397,16 +1416,40 @@ ref/value/staged path is still refused (mirrors the portal T2 guarantee)."
       (should-not (string-match-p (regexp-quote leak) header)))))
 
 (ert-deftest safeslop-test-session-terminal-egress-chrome-is-prominent-and-value-free ()
-  "Container-deny terminals show only the pending count and review shortcut."
+  "A nonzero denial count is literal, theme-faced, and destination-free."
   (with-temp-buffer
     (let ((data '((session_id . "sess-1") (environment . "container") (network . "deny"))))
       (setq-local safeslop-session-terminal-data data)
       (setq-local safeslop-session-egress-pending-count 3)
       (setq header-line-format (safeslop-session--header-line data))
       (safeslop-session--install-safety-chrome data))
-    (should (string-match-p "egress:3 denied" safeslop-session-safety-chrome))
-    (should (string-match-p "C-c C-v review" safeslop-session-safety-chrome))
-    (should (string-match-p "Egress: 3 denied" (format "%s" header-line-format)))))
+    (let* ((chrome safeslop-session-safety-chrome)
+           (header (format "%s" header-line-format))
+           (chrome-pos (string-match "EGRESS: 3 REQUESTS DENIED" chrome))
+           (header-pos (string-match "EGRESS: 3 REQUESTS DENIED" header)))
+      (should chrome-pos)
+      (should header-pos)
+      (should (eq (get-text-property chrome-pos 'face chrome)
+                  'safeslop-session-egress-denied))
+      (should (eq (get-text-property header-pos 'face header)
+                  'safeslop-session-egress-denied))
+      (should (string-match-p "C-c C-v review" chrome))
+      (dolist (leak '("api.example.com" "/secret" "Bearer"))
+        (should-not (string-match-p (regexp-quote leak) chrome))
+        (should-not (string-match-p (regexp-quote leak) header))))))
+
+(ert-deftest safeslop-test-session-terminal-zero-egress-count-is-not-alarmed ()
+  "Zero denied requests stays legible without the pending-denial warning face."
+  (with-temp-buffer
+    (let ((data '((session_id . "sess-1") (environment . "container") (network . "deny"))))
+      (setq-local safeslop-session-terminal-data data)
+      (setq-local safeslop-session-egress-pending-count 0)
+      (setq header-line-format (safeslop-session--header-line data)))
+    (let* ((header (format "%s" header-line-format))
+           (pos (string-match "Egress: 0 requests denied" header)))
+      (should pos)
+      (should-not (eq (get-text-property pos 'face header)
+                      'safeslop-session-egress-denied)))))
 
 (ert-deftest safeslop-test-session-terminal-egress-monitor-is-read-only ()
   "An observation callback updates chrome but never opens review or mutates authority."
@@ -1421,21 +1464,27 @@ ref/value/staged path is still refused (mirrors the portal T2 guarantee)."
         (safeslop-session--terminal-egress-refresh)
         (funcall callback (safeslop-contract-parse-string
                            "{\"schema_version\":1,\"ok\":true,\"data\":{\"pending_count\":2},\"warnings\":[],\"errors\":[]}")))
-      (should (string-match-p "egress:2 denied" safeslop-session-safety-chrome))
+      (should (string-match-p "EGRESS: 2 REQUESTS DENIED"
+                              safeslop-session-safety-chrome))
       (should-not popped))))
 
 (ert-deftest safeslop-test-session-terminal-egress-review-needs-explicit-shortcut ()
-  "Only the terminal shortcut opens the existing explicit review."
-  (let (reviewed)
+  "The explicit shortcut is buffer-local and does not leak to other terminals."
+  (let ((shared-map (make-sparse-keymap)) reviewed)
     (with-temp-buffer
+      (use-local-map shared-map)
       (setq-local safeslop-session-id "sess-1")
       (setq-local safeslop-session-terminal-data
                   '((session_id . "sess-1") (environment . "container") (network . "deny")))
       (safeslop-session--install-egress-review-key)
       (cl-letf (((symbol-function 'safeslop-session-egress-review)
                  (lambda (id data) (setq reviewed (list id data)))))
-        (call-interactively (lookup-key (current-local-map) (kbd "C-c C-v"))))
-      (should (equal (car reviewed) "sess-1")))))
+        (should (eq (key-binding (kbd "C-c C-v"))
+                    #'safeslop-session--terminal-egress-review))
+        (call-interactively (key-binding (kbd "C-c C-v"))))
+      (should (equal (car reviewed) "sess-1")))
+    (should-not (eq (lookup-key shared-map (kbd "C-c C-v"))
+                    #'safeslop-session--terminal-egress-review))))
 
 (ert-deftest safeslop-test-session-safety-chrome-is-color-redundant-and-value-free ()
   "Safety chrome keeps literal posture words, reinforces them with existing faces,
@@ -1508,7 +1557,8 @@ buffer-local id after terminal creation, and installs a value-free creds header.
             (should (equal safeslop-session-id "sess-xyz"))
             (should (stringp header-line-format))
             (should (string-match-p "creds: github acme/web app rw" header-line-format))
-            (should (string-match-p "Egress: 0 denied (C-c C-v review)" header-line-format))
+            (should (string-match-p "Egress: 0 requests denied (C-c C-v review)"
+                                    header-line-format))
             (should-not (string-match-p "op://\\|env:\\|/home/me" header-line-format))
             (should (equal (substring-no-properties safeslop-session-safety-chrome)
                            "safeslop[container/deny creds:1] egress:0 denied — C-c C-v review"))
@@ -1658,6 +1708,89 @@ after its name became descriptive (specs/0086 T3)."
               (should-not (string-match-p "/secret\\|Bearer\\|token" text)))))
       (when (get-buffer review) (kill-buffer review)))))
 
+(ert-deftest safeslop-test-progressive-egress-review-actions-select-and-refresh-in-place ()
+  "The first row is actionable and Allow now visibly completes in the same buffer."
+  (let ((review "*safeslop egress review*") observation-callback grant-callback
+        grant-call pop-count)
+    (unwind-protect
+        (cl-letf (((symbol-function 'safeslop-session-egress-observations)
+                   (lambda (_id cb quiet)
+                     (should quiet)
+                     (setq observation-callback cb)))
+                  ((symbol-function 'safeslop-session-egress-grant)
+                   (lambda (id host port cb quiet)
+                     (setq grant-call (list id host port quiet)
+                           grant-callback cb)))
+                  ((symbol-function 'pop-to-buffer)
+                   (lambda (&rest _) (setq pop-count (1+ (or pop-count 0))))))
+          (safeslop-session-egress-review
+           "sess-9" '((profile . "review") (policy_path . "/repo/safeslop.cue")
+                      (policy_hash . "hash-current")))
+          (funcall observation-callback
+                   (safeslop-contract-parse-string
+                    "{\"schema_version\":1,\"ok\":true,\"data\":{\"observations\":[{\"host\":\"api.example.com\",\"port\":443,\"count\":2,\"last_seen\":\"2026-07-18T00:00:00Z\",\"grantable\":true}],\"pending_count\":1},\"warnings\":[],\"errors\":[]}"))
+          (with-current-buffer review
+            (should (eq major-mode 'safeslop-egress-review-mode))
+            (should (equal (alist-get 'host (safeslop-session--review-observation-at-point))
+                           "api.example.com"))
+            (should (eq (key-binding (kbd "a")) #'safeslop-egress-review-allow-now))
+            (call-interactively (key-binding (kbd "a")))
+            (should (string-match-p "Allow now in progress" (buffer-string))))
+          (should (equal grant-call '("sess-9" "api.example.com" 443 t)))
+          (should (functionp grant-callback))
+          (funcall grant-callback
+                   (safeslop-contract-parse-string
+                    "{\"schema_version\":1,\"ok\":true,\"data\":{\"host\":\"api.example.com\",\"port\":443},\"warnings\":[],\"errors\":[]}"))
+          ;; A successful mutation starts one quiet observation refresh. Complete
+          ;; it with an empty list to model the now-reviewed destination.
+          (funcall observation-callback
+                   (safeslop-contract-parse-string
+                    "{\"schema_version\":1,\"ok\":true,\"data\":{\"observations\":[],\"pending_count\":0},\"warnings\":[],\"errors\":[]}"))
+          (should (= pop-count 1))
+          (with-current-buffer review
+            (should (string-match-p
+                     "Allowed for this session; retry the original request"
+                     (buffer-string)))
+            (should (string-match-p "No pending denied destinations" (buffer-string)))))
+      (when (get-buffer review) (kill-buffer review)))))
+
+(ert-deftest safeslop-test-progressive-egress-review-ignores-late-reuse-callback ()
+  "A same-session callback from an older opening cannot overwrite the new review."
+  (let ((review "*safeslop egress review*") callbacks first-callback second-callback)
+    (unwind-protect
+        (cl-letf (((symbol-function 'safeslop-session-egress-observations)
+                   (lambda (_id callback _quiet) (push callback callbacks)))
+                  ((symbol-function 'pop-to-buffer) (lambda (&rest _) nil)))
+          (safeslop-session-egress-review "sess-9" '((profile . "old")))
+          (setq first-callback (car callbacks))
+          (safeslop-session-egress-review "sess-9" '((profile . "new")))
+          (setq second-callback (car callbacks))
+          (funcall first-callback
+                   (safeslop-contract-parse-string
+                    "{\"schema_version\":1,\"ok\":true,\"data\":{\"observations\":[{\"host\":\"stale.example.com\",\"port\":443,\"grantable\":true}]},\"warnings\":[],\"errors\":[]}"))
+          (with-current-buffer review
+            (should-not (string-match-p "stale.example.com" (buffer-string))))
+          (funcall second-callback
+                   (safeslop-contract-parse-string
+                    "{\"schema_version\":1,\"ok\":true,\"data\":{\"observations\":[{\"host\":\"current.example.com\",\"port\":443,\"grantable\":true}]},\"warnings\":[],\"errors\":[]}"))
+          (with-current-buffer review
+            (should (string-match-p "current.example.com" (buffer-string)))
+            (should-not (string-match-p "stale.example.com" (buffer-string)))))
+      (when (get-buffer review) (kill-buffer review)))))
+
+(ert-deftest safeslop-test-session-detail-egress-grant-prompts-with-fixed-id ()
+  "The detail `+' command prompts for a target instead of dispatching nil fields."
+  (let (call)
+    (with-temp-buffer
+      (safeslop-session-detail-mode)
+      (setq-local safeslop-session-detail-session-id "sess-9")
+      (cl-letf (((symbol-function 'read-string) (lambda (&rest _) "api.example.com"))
+                ((symbol-function 'read-number) (lambda (&rest _) 443))
+                ((symbol-function 'safeslop-session-egress-grant)
+                 (lambda (&rest args) (setq call args))))
+        (safeslop-session-detail-egress-grant))
+      (should (equal call '("sess-9" "api.example.com" 443))))))
+
 (ert-deftest safeslop-test-progressive-egress-detail-pending-count-is-async ()
   "Portal session detail displays a passive count without waiting or popping later."
   (let ((detail "*safeslop session sess-9*") callback pop-count)
@@ -1679,6 +1812,33 @@ after its name became descriptive (specs/0086 T3)."
             (should (string-match-p "Egress review: 3 pending denied destinations" (buffer-string))))
       (when (get-buffer detail) (kill-buffer detail))))))
 
+(ert-deftest safeslop-test-progressive-egress-detail-ignores-stale-count-callback ()
+  "A detail refresh cannot be overwritten by its prior pending-count callback."
+  (let ((detail "*safeslop session sess-9*") callbacks old-callback new-callback)
+    (unwind-protect
+        (cl-letf (((symbol-function 'safeslop-session-egress-observations)
+                   (lambda (_id callback _quiet) (push callback callbacks)))
+                  ((symbol-function 'pop-to-buffer) (lambda (&rest _) nil)))
+          (dolist (_ '(first second))
+            (safeslop-session-detail
+             "sess-9" '((session_id . "sess-9") (agent . "pi") (status . "created")
+                        (workspace . "/w") (environment . "container") (network . "deny")))
+            (if old-callback
+                (setq new-callback (car callbacks))
+              (setq old-callback (car callbacks))))
+          (funcall old-callback
+                   (safeslop-contract-parse-string
+                    "{\"schema_version\":1,\"ok\":true,\"data\":{\"pending_count\":9},\"warnings\":[],\"errors\":[]}"))
+          (with-current-buffer detail
+            (should (string-match-p "checking passive denied destinations" (buffer-string)))
+            (should-not (string-match-p "9 pending" (buffer-string))))
+          (funcall new-callback
+                   (safeslop-contract-parse-string
+                    "{\"schema_version\":1,\"ok\":true,\"data\":{\"pending_count\":1},\"warnings\":[],\"errors\":[]}"))
+          (with-current-buffer detail
+            (should (string-match-p "1 pending denied destination" (buffer-string)))))
+      (when (get-buffer detail) (kill-buffer detail)))))
+
 (ert-deftest safeslop-test-progressive-egress-always-allow-needs-explicit-add ()
   "Preview renders policy delta first; a stale hash sends no durable add request."
   (let ((review "*safeslop profile egress review*") calls)
@@ -1698,8 +1858,12 @@ after its name became descriptive (specs/0086 T3)."
                             "--host" "api.example.com" "--port" "443"
                             "--expected-policy-hash" "hash-current" "--output" "json"))))
           (with-current-buffer review
+            (should (eq major-mode 'safeslop-profile-egress-review-mode))
             (should (string-match-p "Policy changed" (buffer-string)))
-            (should-not (lookup-key (current-local-map) (kbd "a")))))
+            (should (eq (key-binding (kbd "a")) #'safeslop-profile-egress-review-add))
+            (should-error (call-interactively (key-binding (kbd "a")))
+                          :type 'user-error))
+          (should (= (length calls) 1)))
       (when (get-buffer review) (kill-buffer review)))))
 
 (ert-deftest safeslop-test-session-detail-prefers-structured-failure ()

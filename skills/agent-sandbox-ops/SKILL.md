@@ -407,10 +407,14 @@ sessions are rejected. IP literals, private/link-local/metadata, broker/mint,
 wildcard, suffix, URL, and non-80/443 targets are non-grantable. Emacs labels
 container deny **Deny (progressive review)** without granting authority; its
 session detail shows a passive count and `v` opens operator review. A live
-container-deny terminal also shows `Egress: N denied (C-c C-v review)` and that
-shortcut opens the same explicit review. There `a` allows now, `k` keeps denied,
-and `A` previews a hash/CUE delta before a separate explicit add. Agent traffic
-never triggers a modal, focuses a buffer, edits CUE, or changes authority.
+container-deny terminal also shows the count plus `C-c C-v`; a nonzero count is
+literal **`EGRESS: N REQUESTS DENIED`** text with theme-warning color as a
+redundant signal. The shortcut opens the same explicit review in raw Emacs and
+Evil/Doom. Review starts on the first destination; `TAB`/`S-TAB` moves rows, `a`
+allows now, `k` keeps denied, and `A` previews a hash/CUE delta before a separate
+explicit add. Allow/keep reports progress and refreshes in place; retry the
+original request after Allow now. Agent traffic never triggers a modal, focuses a
+buffer, edits CUE, or changes authority.
 
 ## Safety checklist
 

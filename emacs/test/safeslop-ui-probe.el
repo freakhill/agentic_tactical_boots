@@ -176,5 +176,54 @@
     (safeslop-ui-probe--assert-key "C-c C-c" #'safeslop-profiles-compose-preview-save)
     (safeslop-ui-probe--assert-key "q" #'safeslop-profiles-compose-cancel)))
 
+(ert-deftest safeslop-ui-probe-egress-review-keys-resolve ()
+  "Denied-egress actions beat Evil motions in the actual rendered review."
+  (let ((name "*safeslop egress review*") callback)
+    (unwind-protect
+        (cl-letf (((symbol-function 'safeslop-session-egress-observations)
+                   (lambda (_id cb _quiet) (setq callback cb)))
+                  ((symbol-function 'pop-to-buffer) (lambda (&rest _) nil)))
+          (safeslop-session-egress-review
+           "sess-ui" '((profile . "review") (policy_path . "/repo/safeslop.cue")
+                        (policy_hash . "hash-current")))
+          (funcall callback
+                   (safeslop-contract-parse-string
+                    "{\"schema_version\":1,\"ok\":true,\"data\":{\"observations\":[{\"host\":\"api.example.com\",\"port\":443,\"count\":1,\"last_seen\":\"2026-07-18T00:00:00Z\",\"grantable\":true}],\"pending_count\":1},\"warnings\":[],\"errors\":[]}"))
+          (with-current-buffer name
+            (safeslop-ui-probe--enter-key-state)
+            (should (eq major-mode 'safeslop-egress-review-mode))
+            (safeslop-ui-probe--assert-key "a" #'safeslop-egress-review-allow-now)
+            (safeslop-ui-probe--assert-key "k" #'safeslop-egress-review-keep-denied)
+            (safeslop-ui-probe--assert-key "A" #'safeslop-egress-review-always-allow)
+            (safeslop-ui-probe--assert-key "g" #'safeslop-egress-review-refresh)
+            (safeslop-ui-probe--assert-key "q" #'quit-window)))
+      (when (get-buffer name) (kill-buffer name)))))
+
+(ert-deftest safeslop-ui-probe-persistent-egress-key-resolves ()
+  "The second explicit persistent-rule write also beats Evil append."
+  (safeslop-ui-probe--with-mode #'safeslop-profile-egress-review-mode
+    (safeslop-ui-probe--assert-key "a" #'safeslop-profile-egress-review-add)
+    (safeslop-ui-probe--assert-key "q" #'quit-window)))
+
+(ert-deftest safeslop-ui-probe-session-detail-egress-keys-resolve ()
+  "Session-detail egress routes resolve in raw Emacs and Evil normal state."
+  (let ((name "*safeslop session sess-ui*"))
+    (unwind-protect
+        (cl-letf (((symbol-function 'safeslop-session-egress-observations)
+                   (lambda (&rest _) nil))
+                  ((symbol-function 'pop-to-buffer) (lambda (&rest _) nil)))
+          (safeslop-session-detail
+           "sess-ui" '((session_id . "sess-ui") (agent . "pi") (status . "created")
+                        (workspace . "/w") (environment . "container") (network . "deny")))
+          (with-current-buffer name
+            (safeslop-ui-probe--enter-key-state)
+            (should (eq major-mode 'safeslop-session-detail-mode))
+            (safeslop-ui-probe--assert-key "v" #'safeslop-session-detail-egress-review)
+            (safeslop-ui-probe--assert-key "o" #'safeslop-session-detail-egress-observations)
+            (safeslop-ui-probe--assert-key "G" #'safeslop-session-detail-egress-grants)
+            (safeslop-ui-probe--assert-key "+" #'safeslop-session-detail-egress-grant)
+            (safeslop-ui-probe--assert-key "-" #'safeslop-session-detail-egress-revoke)))
+      (when (get-buffer name) (kill-buffer name)))))
+
 (provide 'safeslop-ui-probe)
 ;;; safeslop-ui-probe.el ends here

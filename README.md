@@ -226,12 +226,17 @@ never opens a prompt, focuses a review buffer, edits CUE, or changes network
 authority. In Emacs, compose labels container deny as **Deny (progressive
 review)** (not an authorization); session detail shows a passive pending count
 and `v` opens review. Live container-deny terminals additionally show a value-free
-`Egress: N denied (C-c C-v review)` header/mode-line indicator that refreshes from
-read-only observations; `C-c C-v` is still an explicit operator action, never an
-agent-triggered prompt. In review, `a` is Allow now, `k` is Keep denied, and `A`
-first shows the hash/CUE delta before a separate explicit durable add. Deny-tier
-containers set both lowercase and uppercase proxy environment variables, so ordinary
-HTTP clients such as curl reach the proxy-observation boundary instead of raw DNS.
+pending count and `C-c C-v` route in their header/mode line. A nonzero count is
+literal **`EGRESS: N REQUESTS DENIED`** text reinforced with the theme's warning
+color; color is not the only signal. The count refreshes from read-only
+observations, and `C-c C-v` is still an explicit operator action, never an
+agent-triggered prompt. Review starts on its first actionable row in raw Emacs and
+Evil/Doom; `TAB`/`S-TAB` moves rows, `a` is Allow now, `k` is Keep denied, and `A`
+first shows the hash/CUE delta before a separate explicit durable add. Allow/keep
+shows progress and refreshes the same review after completion; after Allow now,
+retry the original request. Deny-tier containers set both lowercase and uppercase
+proxy environment variables, so ordinary HTTP clients such as curl reach the
+proxy-observation boundary instead of raw DNS.
 
 `session status` and `session list` reconcile liveness: a session still marked
 `running` whose recorded process is gone — or whose PID now names a different
