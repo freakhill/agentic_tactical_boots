@@ -19,6 +19,7 @@ fail() {
 lock_version=""
 lock_url=""
 lock_sha256=""
+verified_jar=""
 read_lock() {
   [[ -f "$LOCK_FILE" ]] || fail "missing lock file: formal/tla2tools.lock"
 
@@ -101,12 +102,102 @@ bootstrap() {
   command -v java >/dev/null 2>&1 || fail "java is required for TLA+ checks"
   verify_jar "$jar"
   java -version >/dev/null 2>&1 || fail "java is not runnable"
+  verified_jar="$jar"
 
   printf 'tla-session: verified TLA+ Tools v%s (%s)\n' "$lock_version" "$lock_sha256"
 }
 
+run_with_timeout() {
+  local seconds="$1"
+  shift
+  "$@" &
+  local command_pid=$!
+  (
+    sleep "$seconds"
+    kill -TERM "$command_pid" 2>/dev/null || exit 0
+    sleep 2
+    kill -KILL "$command_pid" 2>/dev/null || true
+  ) &
+  local timer_pid=$!
+  local rc
+  if wait "$command_pid"; then rc=0; else rc=$?; fi
+  kill "$timer_pid" 2>/dev/null || true
+  wait "$timer_pid" 2>/dev/null || true
+  return "$rc"
+}
+
+run_tlc() {
+  local cfg="$1" output_dir="$2"
+  rm -rf "$output_dir"
+  mkdir -p "$output_dir/meta"
+  verify_jar "$verified_jar"
+  (
+    cd "$ROOT/formal/session"
+    run_with_timeout 120 java -XX:+UseParallelGC -cp "$verified_jar" tlc2.TLC \
+      -workers 1 \
+      -metadir "$output_dir/meta" \
+      -dump dot,actionlabels "$output_dir/states.dot" \
+      -config "$cfg" \
+      SessionBoundary.tla
+  ) >"$output_dir/tlc.log" 2>&1
+}
+
+check_model() {
+  bootstrap >/dev/null
+  local model_dir="$ARTIFACT_DIR/model"
+  mkdir -p "$model_dir"
+
+  local started elapsed states generated edges
+  started="$(date +%s)"
+  if ! run_tlc "SessionBoundary.cfg" "$model_dir/positive"; then
+    tail -80 "$model_dir/positive/tlc.log" >&2 || true
+    fail "positive model check failed"
+  fi
+  elapsed=$(( $(date +%s) - started ))
+  read -r generated states < <(awk '
+    /states generated, [0-9]+ distinct states found/ {
+      generated = $1
+      for (i = 1; i <= NF; i++) if ($i == "distinct") states = $(i - 1)
+    }
+    END { gsub(/,/, "", generated); gsub(/,/, "", states); print generated, states }
+  ' "$model_dir/positive/tlc.log")
+  edges="$(grep -c -- ' -> ' "$model_dir/positive/states.dot")"
+  [[ "$states" =~ ^[0-9]+$ ]] || fail "could not read positive distinct-state count"
+  [[ "$generated" =~ ^[0-9]+$ ]] || fail "could not read positive generated-state count"
+  [[ "$edges" =~ ^[0-9]+$ ]] || fail "could not read positive edge count"
+  (( states <= 100000 )) || fail "positive model exceeded 100000 distinct states"
+  (( elapsed <= 120 )) || fail "positive model exceeded 120 seconds"
+  printf 'tla-session: positive generated=%s distinct=%s edges=%s elapsed=%ss\n' "$generated" "$states" "$edges" "$elapsed"
+
+  local mutant invariant action cfg out
+  while IFS='|' read -r mutant invariant action; do
+    cfg="mutants/${mutant}.cfg"
+    out="$model_dir/mutant-${mutant}"
+    if run_tlc "$cfg" "$out"; then
+      fail "mutant ${mutant} unexpectedly passed"
+    fi
+    grep -F "Invariant ${invariant} is violated" "$out/tlc.log" >/dev/null || {
+      tail -80 "$out/tlc.log" >&2 || true
+      fail "mutant ${mutant} missed expected invariant ${invariant}"
+    }
+    grep -F "$action" "$out/tlc.log" >/dev/null || {
+      tail -80 "$out/tlc.log" >&2 || true
+      fail "mutant ${mutant} missed action anchor ${action}"
+    }
+    printf 'tla-session: mutant %s violated %s at %s\n' "$mutant" "$invariant" "$action"
+  done <<'MUTANTS'
+RuntimeBeforeDurable|RuntimeAuthoritySubsetOfDurableAuthority|MutantRuntimeBeforeDurable
+SecondOwner|AtMostOneLiveOwner|MutantSecondOwner
+StaleToken|ExactOwnerRequiredForHandoffReleaseSignal|MutantStaleToken
+UnknownAsOld|CommitUnknownNeverAssumedOld|MutantUnknownAsOld
+AckWithoutInspect|NormalStateHasGenerationAgreement|MutantAckWithoutInspect
+StopWithoutProof|TeardownClaimRequiresProvenTeardown|MutantStopWithoutProof
+MUTANTS
+}
+
 case "${1:-}" in
   bootstrap) bootstrap ;;
-  "") fail "usage: scripts/check-tla-session.sh bootstrap" ;;
+  model) check_model ;;
+  "") fail "usage: scripts/check-tla-session.sh <bootstrap|model>" ;;
   *) fail "unknown command: $1" ;;
 esac
