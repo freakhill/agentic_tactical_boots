@@ -1,11 +1,10 @@
 ---- MODULE SessionBoundary ----
 EXTENDS Integers, FiniteSets, TLC
 
-CONSTANT Mutant
+CONSTANTS Mutant, MaxRevision
 
 Owners == {"OwnerA", "OwnerB"}
 Grants == {"GrantA", "GrantB"}
-MaxRevision == 2
 NoOwner == "NoOwner"
 NoGen == [authority |-> {}, revision |-> -1]
 NoDirection == "NoDirection"

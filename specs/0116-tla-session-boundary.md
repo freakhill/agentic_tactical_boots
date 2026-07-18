@@ -99,6 +99,8 @@ Baseline (2026-07-18, `ab08404`, clean main): focused session/container/CLI test
   internal/engine/session/store.go|writeLocked|protocol state|atomic old/new/uncertain commit boundary
   ```
 
+  TASK 6 INVENTORY RECONCILIATION: The cross-platform type-aware AST scan found six pre-existing `ab08404` owners omitted from the hand-written Task 1 list: `cmdSessionPruneWithDeps` (reconcile), `createBuiltinSessionWithDeps` and `createSessionFromProfileWithDeps` (immutable base authority), `dismissSessionEgressWithDeps` and the `recoverRunningSessionEgress` wrapper (recovery may commit), and `container.SweepDeadInvocations` (exact process-evidence construction). This is an inventory correction, not a behavior change. The generated allowlist is now authoritative and also includes the two intentional Task 4 concrete adapter owners.
+
 ## Wave 2 — independent bounded safety model
 
 - [x] Pin and verify the development-only TLC toolchain
@@ -135,11 +137,13 @@ Baseline (2026-07-18, `ab08404`, clean main): focused session/container/CLI test
 
   TASK 5 EVIDENCE: The committed three-node/two-edge v1.7.4 fixture parses deterministically, and the same parser read the retained 476-node/1,028-edge positive TLC artifact. Eleven syntax/value/shape mutants fail for their intended reason, including unknown attributes/actions, malformed escapes, duplicate or missing nodes, invalid dropped fields, incomplete ranks, and an absent mechanically marked initial. Add/drop/rename-edge and altered-initial controls report the expected `TLA - Go` or `Go - TLA` direction with a shortest graph witness. The exact focused verification exited 0.
 
-- [ ] Prove bounded TLA+/Go graph equivalence and mutation ownership
+- [x] Prove bounded TLA+/Go graph equivalence and mutation ownership
   FILE:     new `internal/engine/session/tla_conformance_test.go`, `internal/engine/session/protocol_mutation_test.go`, `internal/engine/session/testdata/protocol-mutation-allowlist.txt`, `scripts/check-tla-session.sh`, `Makefile`
   CHANGE:   Parse bounds from the positive cfg; compare TLC initial nodes with adapter-round-tripped Go `InitialStates` before BFS; enumerate the reducer graph and require exact bidirectional initial/state/labelled-edge equality. Require every non-sentinel Go action/outcome/effect and every positive TLA action to be reachable/mapped. Add an end-to-end dropped-edge control. Add an all-`internal/` syntax-aware mutation scanner, exact sorted baseline at `internal/engine/session/testdata/protocol-mutation-allowlist.txt` with stable `path|function|field|operation` lines (no line numbers), byte-stability test, and synthetic forbidden-write control; no new model-owned mutation site may appear. Add `check-tla-session` but still keep it separate from full `make check` until production wiring finishes.
   VERIFY:   `make check-tla-session && TLA_OFFLINE=1 make check-tla-session && go test ./internal/engine/session -run 'TLAConformance|ProtocolMutation' -count=1 -v`
   EXPECTED: Initial, reachable-state, and labelled-edge sets are exactly equal both ways; coverage is non-vacuous; the mutation baseline matches Wave 1 and rejects growth.
+
+  TASK 6 EVIDENCE: `MaxRevision=2` now comes from every TLC cfg, with the positive cfg parsed by Go. TLC's 476 raw states/1,028 raw edges normalize to 261 states/559 labelled edges, exactly equal to the adapter-round-tripped Go initial set and reducer BFS in both directions. Every non-sentinel Go action/outcome/effect and all 28 TLA+ labels are reachable; the full dropped-edge control fails directionally. The Darwin+Linux `go/types` scan pins 133 sorted field/call/gateway entries across 48 concrete owners, rejects direct, alias, renamed-receiver, owner-only, and positional synthetic bypasses, and incorporates the documented Task 1 reconciliation. Online and `TLA_OFFLINE=1` `make check-tla-session` plus the focused verbose tests exited 0.
 
 ## Wave 4 — route lifecycle ownership through the reducer
 

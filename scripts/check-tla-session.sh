@@ -195,9 +195,21 @@ StopWithoutProof|TeardownClaimRequiresProvenTeardown|MutantStopWithoutProof
 MUTANTS
 }
 
+check_conformance() {
+  check_model
+  local graph="$ARTIFACT_DIR/model/positive/states.dot"
+  [[ -f "$graph" ]] || fail "positive TLC graph is missing"
+  (
+    cd "$ROOT"
+    TLA_SESSION_GRAPH="$graph" TLA_SESSION_REQUIRE_GRAPH=1 \
+      go test ./internal/engine/session -run 'TLAConformance|ProtocolMutation' -count=1
+  ) || fail "TLA+/Go session conformance failed"
+}
+
 case "${1:-}" in
   bootstrap) bootstrap ;;
   model) check_model ;;
-  "") fail "usage: scripts/check-tla-session.sh <bootstrap|model>" ;;
+  check) check_conformance ;;
+  "") fail "usage: scripts/check-tla-session.sh <bootstrap|model|check>" ;;
   *) fail "unknown command: $1" ;;
 esac
