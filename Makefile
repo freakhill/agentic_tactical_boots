@@ -14,7 +14,7 @@ CONTAINER_SRC := library/layer/container
 CONTAINER_DST := internal/engine/container/assets
 SYNCED        := allowlist.domains Dockerfile.agent Dockerfile.agent.tools proxy-image.lock.json proxy-image.index.json
 
-.PHONY: build test test-emacs test-emacs-ui-matrix test-container-images test-progressive-egress-smoke bootstrap-tla-session check-tla-session-model check-tla-session vet fmt fmtcheck check check-assets check-npm-locks check-proxy-image-lock check-active-surface-drift check-catalog-sync check-pivot-denylist check-host-helper-exec check-hostpath-imports sync-container-assets render-catalog install install-emacs install-mcp dist clean
+.PHONY: build test test-emacs test-emacs-ui-matrix test-container-images test-progressive-egress-smoke bootstrap-tla-session check-tla-session-model check-tla-session bootstrap-tla-promotion check-tla-promotion-model check-tla-promotion vet fmt fmtcheck check check-assets check-npm-locks check-proxy-image-lock check-active-surface-drift check-catalog-sync check-pivot-denylist check-host-helper-exec check-hostpath-imports sync-container-assets render-catalog install install-emacs install-mcp dist clean
 
 ## Build the local binary (static — no cgo, immune to the WARP/uv install path).
 build:
@@ -52,6 +52,15 @@ check-tla-session-model:
 
 check-tla-session:
 	scripts/check-tla-session.sh check
+
+bootstrap-tla-promotion:
+	scripts/check-tla-promotion.sh bootstrap
+
+check-tla-promotion-model:
+	scripts/check-tla-promotion.sh model
+
+check-tla-promotion:
+	scripts/check-tla-promotion.sh check
 
 vet:
 	go vet ./...
@@ -113,7 +122,7 @@ check-host-helper-exec:
 check-hostpath-imports:
 	ci/hostpath-import-denylist.sh
 
-check: check-assets check-npm-locks check-proxy-image-lock check-active-surface-drift check-catalog-sync check-pivot-denylist check-host-helper-exec check-hostpath-imports check-tla-session vet fmtcheck test test-emacs
+check: check-assets check-npm-locks check-proxy-image-lock check-active-surface-drift check-catalog-sync check-pivot-denylist check-host-helper-exec check-hostpath-imports check-tla-session check-tla-promotion vet fmtcheck test test-emacs
 
 install-emacs:
 	mkdir -p "$(HOME)/.local/share/safeslop/emacs"

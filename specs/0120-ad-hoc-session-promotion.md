@@ -34,7 +34,7 @@ Emacs presents `Promote to new profile…` only for ad-hoc sessions. It fetches 
   VERIFY: `go test ./internal/engine/promotion -run 'Promotion|Prepare|Apply|Invariant' -count=1 -v`
   EXPECTED: Focused tests prove the pure kernel rejects all unsafe transitions and emits only the five data-only effects.
 
-- [ ] T2 — Add the bounded promotion TLA+ relation, mutants, and bidirectional graph conformance
+- [x] T2 — Add the bounded promotion TLA+ relation, mutants, and bidirectional graph conformance
   FILE: `formal/promotion/Promotion.tla`, `formal/promotion/Promotion.cfg`, `formal/promotion/mutants/*.cfg`, `formal/promotion/README.md`, `internal/engine/promotion/tla_*_test.go`, `internal/engine/promotion/testdata/*`, `scripts/check-tla-promotion.sh`, `Makefile`
   CHANGE: Independently author the finite TLA+ relation and strict graph parser/comparator integration. Require positive invariant/deadlock checks and named failures for mutants removing the empty-selection, exact-source, complete-grant-revision, policy-hash, create-only, validation, and source-consistency guards or treating unknown commit as success. Add bootstrap/model/conformance targets and include promotion conformance in `make check` without adding a binary dependency.
   VERIFY: `make check-tla-promotion && TLA_OFFLINE=1 make check-tla-promotion && go test ./internal/engine/promotion -run 'TLA|Graph|Mutation' -count=1 -v`
