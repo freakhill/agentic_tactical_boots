@@ -28,7 +28,7 @@ The promotion model has its own `formal/promotion/` relation and pure Go reducer
 
 Emacs presents `Promote to new profile…` only for ad-hoc sessions. It fetches fresh value-free session/grant data, prompts for a new name, renders all grants unchecked with `session-only → profile-persistent / future sessions`, invokes preview, shows the pinned review facts, requires a second confirmation, then applies the exact plan. It keeps draft/review state on cancellation, stale/validation failure, and commit uncertainty. Known success routes to normal file review/trust; no path auto-trusts, stops, or launches.
 
-- [ ] T1 — Add RED promotion-kernel tests and an independent reducer
+- [x] T1 — Add RED promotion-kernel tests and an independent reducer
   FILE: `internal/engine/promotion/promotion.go`, `internal/engine/promotion/promotion_test.go`
   CHANGE: Define data-only source/policy snapshots, plan intent, finite events/effects/outcomes, normalization, `Prepare`, `CheckApply`, and deterministic `Step`. Write RED tests first for every pinned invariant, including empty selection, exact selected-ID mapping, no session/runtime write effect, source/policy matching, create-only/builtin refusal, validation-before-replace, and unknown-commit routing.
   VERIFY: `go test ./internal/engine/promotion -run 'Promotion|Prepare|Apply|Invariant' -count=1 -v`
