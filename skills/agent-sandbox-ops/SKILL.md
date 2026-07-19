@@ -407,6 +407,30 @@ exact current hash, fail closed when stale, atomically validate the complete
 policy, leave it untrusted, and affect only a new session after `safeslop trust`.
 They must never be used as a shortcut to alter a running session.
 
+### Promote an ad-hoc session to a new profile
+
+Use `safeslop profile promote preview NAME [safeslop.cue] --session-id ID
+[--grant-id G]... --plan PLAN --output json` then `safeslop profile promote apply
+--plan PLAN --output json` to turn an ad-hoc session into a **new** project
+profile. Preview reads a value-free session snapshot, renders/validates the
+candidate, and writes a versioned bounded `0600` plan; `--grant-id` is repeatable
+and defaults to empty, so only explicitly selected grants become durable
+`persistentEgress` rules (one-to-one exact FQDN:80/443). The new profile keeps the
+recorded canonical workspace and normalized agent/environment/network, emits exact
+resolved identity with `BareAgent=true` when present, and carries no observation,
+unselected grant, credential/ref, request data, staged path, runtime state, or
+session/grant/revision/timestamp marker. Apply re-reads the bound source and
+policy, creates a profile only (never overwrites a project profile or a builtin),
+requires the source to be `created` or `stopped` (a `running -> stopped` change
+alone stays valid), fails closed on any other drift/stale plan/existing name, and
+reports commit uncertainty as uncertainty. The result is untrusted: review it and
+run `safeslop trust`. Promotion never mutates the source session, grants, runtime
+authority, or trust, and never auto-stops/trusts/launches. In Emacs, `m` on an
+ad-hoc portal/detail row opens the review with every grant unchecked, labels the
+lifetime change `session-only → profile-persistent / future sessions`, and requires
+a second confirmation before applying the exact plan. The bounded promotion
+protocol has a development-only model in `formal/promotion/`.
+
 Only `container` + `network: deny` is enforceable; host and `network: allow`
 sessions are rejected. IP literals, private/link-local/metadata, broker/mint,
 wildcard, suffix, URL, and non-80/443 targets are non-grantable. Emacs labels

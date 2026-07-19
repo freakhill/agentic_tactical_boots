@@ -64,7 +64,7 @@ Emacs presents `Promote to new profile…` only for ad-hoc sessions. It fetches 
   VERIFY: `make test-emacs EMACS="$(command -v emacs)" && make test-emacs-ui-matrix`
   EXPECTED: ERT proves unchecked defaults, exact argv, two confirmations, no implicit grant selection/stop/trust/launch, safe rendering, callback guarding, and retained draft on failure.
 
-- [ ] T7 — Synchronize documentation, operator skill, acceptance notes, and full verification
+- [x] T7 — Synchronize documentation, operator skill, acceptance notes, and full verification
   FILE: `README.md`, `skills/agent-sandbox-ops/SKILL.md`, `formal/promotion/README.md`, `specs/0120-ad-hoc-session-promotion.md`
   CHANGE: Document the CLI, preview/apply drift semantics, created/stopped apply rule, explicit unchecked grants, source-to-future lifetime change, untrusted outcome, no auto-stop/trust/launch, transaction uncertainty, formal bounds/limits, and exact Emacs workflow. Mark tasks only after their verification evidence is recorded.
   VERIFY: `git diff --check && make check && make build`

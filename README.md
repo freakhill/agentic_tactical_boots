@@ -77,6 +77,8 @@ safeslop profile list|presets|defaults --output json profiles, scaffold presets,
 safeslop profile create --name N --agent A --environment E [--bundle B] [--package P] [--no-default-bundle] [--dry-run] --output json
 safeslop profile delete <name> [safeslop.cue] --output json  delete one validated project profile
 safeslop profile show <name> --output json         profile + recipe + three-section safety evaluation
+safeslop profile promote preview NAME [safeslop.cue] --session-id ID [--grant-id G]... --plan PLAN --output json  candidate new profile from an ad-hoc session
+safeslop profile promote apply --plan PLAN --output json          apply an exact ad-hoc promotion plan (creates an untrusted new profile)
 safeslop profile credentials set <profile> [safeslop.cue] --provider <github|forgejo> [--use-origin|--repo owner/name ...] [--write-repo owner/name ...] --output json
 safeslop profile credentials clear <profile> [safeslop.cue] --output json
 safeslop creds link|unlink|status                 manage value-free forge account links
@@ -211,6 +213,8 @@ first, then make the explicit hash-checked write:
 safeslop profile egress preview review safeslop.cue --host api.example.com --port 443 --expected-policy-hash HASH --output json
 safeslop profile egress add     review safeslop.cue --host api.example.com --port 443 --expected-policy-hash HASH --output json
 safeslop profile egress remove  review safeslop.cue --host api.example.com --port 443 --expected-policy-hash HASH --output json
+safeslop profile promote preview NAME [safeslop.cue] --session-id ID [--grant-id G]... --plan PLAN --output json
+safeslop profile promote apply --plan PLAN --output json
 ```
 
 Preview never writes. Add/remove fail closed on a stale hash, validate and
@@ -238,6 +242,52 @@ shows progress and refreshes the same review after completion; after Allow now,
 retry the original request. Deny-tier containers set both lowercase and uppercase
 proxy environment variables, so ordinary HTTP clients such as curl reach the
 proxy-observation boundary instead of raw DNS.
+
+### Promote an ad-hoc session to a new profile
+
+An ad-hoc session (`session create --agent …`, no backing `safeslop.cue`) can be
+promoted into a **new** project profile, carrying only explicitly selected
+session network grants into durable `persistentEgress` for future sessions:
+
+```bash
+safeslop profile promote preview NAME [safeslop.cue] \
+  --session-id ID [--grant-id G]... --plan PLAN --output json
+safeslop profile promote apply --plan PLAN --output json
+```
+
+`preview` reads a value-free snapshot of the ad-hoc session, renders and
+validates the candidate profile, and writes a versioned, bounded, mode `0600`
+plan. `--grant-id` is repeatable and defaults to an empty set: no grant becomes a
+durable rule unless it is explicitly selected, and each selected grant maps
+one-to-one to the same normalized exact FQDN:80/443 destination. The new profile
+preserves the recorded canonical workspace and normalized agent/environment/
+network; if the session has resolved package identity it is emitted exactly with
+`BareAgent=true`, otherwise the synthetic ad-hoc default is preserved. Observations,
+acknowledgements, traffic, unselected grants, credentials/refs, request data,
+staged paths, and runtime state never become durable authority, and no session
+ID/grant ID/revision/timestamp/promotion marker enters the CUE.
+
+`apply` re-reads authoritative session and policy state bound by the plan. It
+creates a new profile only — it never overwrites a project profile or mutates a
+builtin. Preview may run against a `running` source, but apply requires the
+source to be `created` or `stopped`; a `running -> stopped` transition alone does
+not invalidate an otherwise-exact plan. Any other source/policy drift, a stale
+plan, an existing/builtin name, or a validation failure fails closed and leaves
+the target unchanged. Commit uncertainty is reported as uncertainty, never
+success. On known success the resulting policy is an ordinary, still-untrusted
+profile: review it and run `safeslop trust` before a new session can use it.
+Promotion never mutates the source session, its grants, runtime authority, or
+trust state, and never auto-stops, auto-trusts, or launches.
+
+In Emacs, ad-hoc sessions expose `m` (**Promote to new profile…**) in the portal
+and session detail. It fetches a fresh value-free grant snapshot, prompts for a
+new name, shows every grant **unchecked** with the explicit lifetime change
+`session-only → profile-persistent / future sessions`, runs the CLI preview, and
+requires a second confirmation before applying the exact plan. Cancellation,
+stale/validation failures, and commit uncertainty preserve the review buffer;
+known success only points you at ordinary policy review/trust. The bounded
+promotion protocol has its own development-only model — see
+[`formal/promotion/README.md`](formal/promotion/README.md).
 
 `session status` and `session list` reconcile liveness: a session still marked
 `running` whose recorded process is gone — or whose PID now names a different
