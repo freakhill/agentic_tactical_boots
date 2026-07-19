@@ -219,6 +219,7 @@
           (with-current-buffer name
             (safeslop-ui-probe--enter-key-state)
             (should (eq major-mode 'safeslop-session-detail-mode))
+            (safeslop-ui-probe--assert-key "m" #'safeslop-session-detail-promote)
             (safeslop-ui-probe--assert-key "v" #'safeslop-session-detail-egress-review)
             (safeslop-ui-probe--assert-key "o" #'safeslop-session-detail-egress-observations)
             (safeslop-ui-probe--assert-key "G" #'safeslop-session-detail-egress-grants)

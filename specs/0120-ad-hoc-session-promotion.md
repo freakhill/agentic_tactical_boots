@@ -58,7 +58,7 @@ Emacs presents `Promote to new profile…` only for ad-hoc sessions. It fetches 
   VERIFY: `go test ./internal/cli ./internal/jsoncontract -run 'ProfilePromote|PromotionPlan|PromoteHelp|ValueFree|CommitUncertain' -count=1 -v`
   EXPECTED: Exact CLI help/argv and JSON goldens pass; apply changes only a newly absent target on known commit and leaves it untrusted.
 
-- [ ] T6 — Add the explicit Emacs promote review flow and ERT contracts
+- [x] T6 — Add the explicit Emacs promote review flow and ERT contracts
   FILE: `emacs/safeslop-egress.el`, `emacs/safeslop-session.el`, `emacs/safeslop-portal.el`, `emacs/test/safeslop-test.el`, `emacs/test/safeslop-contract-test.el`, `emacs/test/safeslop-ui-probe.el`
   CHANGE: Add portal/detail action visibility only for ad-hoc sessions; fetch current status plus grant snapshot asynchronously; build an unchecked checkbox selection UI; construct exact preview/apply argv; render only safe review fields and the untrusted/future-session statements; require a second confirmation. Guard stale callbacks and retain the buffer/draft for cancellation and all failed/uncertain outcomes; on success open ordinary policy review/trust guidance only.
   VERIFY: `make test-emacs EMACS="$(command -v emacs)" && make test-emacs-ui-matrix`

@@ -67,6 +67,7 @@ so mode-specific actions may override shared help/quit where needed.")
      ("gr" . safeslop-output-refresh)
      ("e" . safeslop-show-last-error))
     (safeslop-session-detail-mode safeslop-session-detail-mode-map
+     ("m"  . safeslop-session-detail-promote)
      ("v"  . safeslop-session-detail-egress-review)
      ("o"  . safeslop-session-detail-egress-observations)
      ("G"  . safeslop-session-detail-egress-grants)

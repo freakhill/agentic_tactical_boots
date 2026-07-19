@@ -29,6 +29,7 @@
 (require 'safeslop-surface)
 (require 'safeslop-session)
 
+(declare-function safeslop-session-promote-open "safeslop-session" (data))
 (declare-function safeslop-profiles "safeslop-profiles" ())
 (declare-function safeslop-profiles--render "safeslop-profiles" (&optional keep-point then))
 (declare-function safeslop-profiles--goto-name "safeslop-profiles" (name))
@@ -434,6 +435,11 @@ already does the state-aware thing."
                    (safeslop-portal--short-id id)))
       (safeslop-session-run-detached id (lambda (_env) (safeslop-portal-refresh)) t))))
 
+(defun safeslop-portal-promote ()
+  "Promote the ad-hoc session at point to a new profile through explicit review."
+  (interactive)
+  (safeslop-session-promote-open (safeslop-portal--session-at-point)))
+
 (defun safeslop-portal-follow-profile ()
   "Switch to Profiles and land on this session's backing profile when present."
   (interactive)
@@ -535,7 +541,7 @@ deleted."
 (defconst safeslop-portal--key-hints
   '(("RET" . "open") ("r" . "run") ("R" . "detach") ("A" . "reattach")
     ("i" . "details") ("s" . "stop/revoke") ("x" . "remove") ("X" . "prune")
-    ("c" . "new") ("N" . "rename") ("^" . "profile") ("g" . "refresh") ("a" . "auto")
+    ("c" . "new") ("N" . "rename") ("m" . "promote") ("^" . "profile") ("g" . "refresh") ("a" . "auto")
     ("d" . "doctor") ("E" . "error") ("L" . "debug") ("?" . "help") ("q" . "quit"))
   "Key/action pairs shown in the portal's in-buffer shortcut legend.")
 
@@ -685,6 +691,7 @@ A nil or non-positive interval leaves the portal static (manual `g' only)."
     (define-key map (kbd "X")   #'safeslop-portal-prune)
     (define-key map (kbd "c")   #'safeslop-portal-new)
     (define-key map (kbd "N")   #'safeslop-portal-rename)
+    (define-key map (kbd "m")   #'safeslop-portal-promote)
     (define-key map (kbd "^")   #'safeslop-portal-follow-profile)
     (define-key map (kbd "g")   #'safeslop-portal-refresh)
     (define-key map (kbd "a")   #'safeslop-portal-toggle-auto-refresh)

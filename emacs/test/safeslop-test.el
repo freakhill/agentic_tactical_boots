@@ -1866,6 +1866,86 @@ after its name became descriptive (specs/0086 T3)."
           (should (= (length calls) 1)))
       (when (get-buffer review) (kill-buffer review)))))
 
+(ert-deftest safeslop-test-session-promote-argv-and-unchecked-defaults ()
+  "Promotion preview starts with no grant ids and apply uses exact plan." 
+  (let ((buf "*safeslop promote session*") calls)
+    (unwind-protect
+        (cl-letf (((symbol-function 'pop-to-buffer) (lambda (&rest _) nil))
+                  ((symbol-function 'read-string) (lambda (&rest _) "saved"))
+                  ((symbol-function 'safeslop--call-json-async)
+                   (lambda (args callback)
+                     (push args calls)
+                     (funcall callback
+                              (safeslop-contract-parse-string
+                               "{\"schema_version\":1,\"ok\":true,\"data\":{\"candidate_policy_hash\":\"hash\"},\"warnings\":[],\"errors\":[]}"))))
+                  ((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+          (safeslop-session-promote-open
+           '((session_id . "sess-9") (agent . "pi") (status . "created")
+             (workspace . "/w") (environment . "container") (network . "deny")
+             (egress_grants . (((id . "g-1") (host . "api.example.com") (port . 443))))))
+          (with-current-buffer buf
+            (should (equal safeslop-session-promote-selection nil))
+            (should (string-match-p (regexp-quote "[ ] api.example.com:443") (buffer-string)))
+            (safeslop-session-promote-preview)
+            (should safeslop-session-promote-preview-ok)
+            (safeslop-session-promote-apply))
+          (let* ((ordered (nreverse calls))
+                 (preview (car ordered))
+                 (apply (cadr ordered)))
+            (should (equal (seq-take preview 5)
+                           '("profile" "promote" "preview" "saved" "--session-id")))
+            (should-not (member "--grant-id" preview))
+            (should (equal (seq-take apply 4) '("profile" "promote" "apply" "--plan")))))
+      (when (get-buffer buf) (kill-buffer buf)))))
+
+(ert-deftest safeslop-test-session-promote-toggle-selects-explicit-grant ()
+  "Only a toggled grant enters preview argv."
+  (let ((buf "*safeslop promote session*") call)
+    (unwind-protect
+        (cl-letf (((symbol-function 'pop-to-buffer) (lambda (&rest _) nil))
+                  ((symbol-function 'read-string) (lambda (&rest _) "saved"))
+                  ((symbol-function 'safeslop--call-json-async)
+                   (lambda (args callback)
+                     (setq call args)
+                     (funcall callback
+                              (safeslop-contract-parse-string
+                               "{\"schema_version\":1,\"ok\":true,\"data\":{},\"warnings\":[],\"errors\":[]}")))))
+          (safeslop-session-promote-open
+           '((session_id . "sess-9") (agent . "pi") (status . "created")
+             (workspace . "/w") (environment . "container") (network . "deny")
+             (egress_grants . (((id . "g-1") (host . "api.example.com") (port . 443))))))
+          (with-current-buffer buf
+            (search-forward "api.example.com")
+            (beginning-of-line)
+            (safeslop-session-promote-toggle)
+            (safeslop-session-promote-preview))
+          (should (equal (seq-take (member "--grant-id" call) 3) '("--grant-id" "g-1" "--plan"))))
+      (when (get-buffer buf) (kill-buffer buf)))))
+
+(ert-deftest safeslop-test-session-promote-ad-hoc-only-and-retains-failure-buffer ()
+  "Profile-backed sessions are rejected and failed apply keeps review text." 
+  (should-error (safeslop-session-promote-open '((session_id . "s") (profile . "p")))
+                :type 'user-error)
+  (let ((buf "*safeslop promote session*"))
+    (unwind-protect
+        (cl-letf (((symbol-function 'pop-to-buffer) (lambda (&rest _) nil))
+                  ((symbol-function 'read-string) (lambda (&rest _) "saved"))
+                  ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+                  ((symbol-function 'safeslop--call-json-async)
+                   (lambda (_args callback)
+                     (funcall callback
+                              (safeslop-contract-parse-string
+                               "{\"schema_version\":1,\"ok\":false,\"data\":{},\"warnings\":[],\"errors\":[{\"code\":\"IO_ERROR\",\"message\":\"promotion policy commit uncertain\",\"details\":{},\"retryable\":false}]}")))))
+          (safeslop-session-promote-open
+           '((session_id . "sess-9") (agent . "pi") (status . "stopped")
+             (workspace . "/w") (environment . "container") (network . "deny")))
+          (with-current-buffer buf
+            (setq safeslop-session-promote-preview-ok t
+                  safeslop-session-promote-plan "/tmp/plan")
+            (safeslop-session-promote-apply)
+            (should (string-match-p "failed or uncertain; draft retained" (buffer-string)))))
+      (when (get-buffer buf) (kill-buffer buf)))))
+
 (ert-deftest safeslop-test-session-detail-prefers-structured-failure ()
   "Structured summary/action render first and suppress unsafe legacy internals."
   (let ((detail (safeslop-session--detail-format

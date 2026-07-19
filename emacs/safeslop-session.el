@@ -608,6 +608,7 @@ the portal so row actions refresh in place instead of stealing the window."
 (defvar safeslop-session-detail-mode-map
   (let ((map (make-sparse-keymap)))
     (set-keymap-parent map safeslop-output-mode-map)
+    (define-key map (kbd "m") #'safeslop-session-detail-promote)
     (define-key map (kbd "v") #'safeslop-session-detail-egress-review)
     (define-key map (kbd "o") #'safeslop-session-detail-egress-observations)
     (define-key map (kbd "G") #'safeslop-session-detail-egress-grants)
@@ -657,6 +658,150 @@ the portal so row actions refresh in place instead of stealing the window."
   (safeslop-session-egress-revoke
    (safeslop-session-detail--id) (read-string "Grant id: ")))
 
+(defun safeslop-session--ad-hoc-data-p (data)
+  "Return non-nil when DATA names an ad-hoc session with no backing policy."
+  (and (stringp (alist-get 'session_id data))
+       (string-empty-p (or (alist-get 'profile data) ""))
+       (string-empty-p (or (alist-get 'policy_path data) ""))))
+
+(defun safeslop-session--promote-preview-args (name session-id plan grant-ids)
+  "Return exact argv for promotion preview. GRANT-IDS may be nil."
+  (append (list "profile" "promote" "preview" name
+                "--session-id" session-id)
+          (apply #'append (mapcar (lambda (id) (list "--grant-id" id)) grant-ids))
+          (list "--plan" plan "--output" "json")))
+
+(defun safeslop-session--promote-apply-args (plan)
+  "Return exact argv for promotion apply."
+  (list "profile" "promote" "apply" "--plan" plan "--output" "json"))
+
+(defun safeslop-session--promotion-safe-grants (data)
+  "Return value-free grant rows from DATA."
+  (let ((grants (alist-get 'egress_grants data)))
+    (cond ((vectorp grants) (append grants nil))
+          ((listp grants) grants)
+          (t nil))))
+
+(defvar-local safeslop-session-promote-data nil)
+(defvar-local safeslop-session-promote-plan nil)
+(defvar-local safeslop-session-promote-selection nil)
+(defvar-local safeslop-session-promote-preview-ok nil)
+
+(defvar safeslop-session-promote-mode-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map safeslop-output-mode-map)
+    (define-key map (kbd "SPC") #'safeslop-session-promote-toggle)
+    (define-key map (kbd "RET") #'safeslop-session-promote-toggle)
+    (define-key map (kbd "p") #'safeslop-session-promote-preview)
+    (define-key map (kbd "a") #'safeslop-session-promote-apply)
+    (define-key map (kbd "q") #'quit-window)
+    map)
+  "Keymap for ad-hoc promotion review buffers.")
+
+(define-derived-mode safeslop-session-promote-mode safeslop-output-mode
+  "safeslop-promote"
+  "Major mode for explicit ad-hoc-session promotion review.")
+
+(defun safeslop-session-promote-toggle ()
+  "Toggle the unchecked/checked grant at point."
+  (interactive)
+  (let ((grant-id (get-text-property (line-beginning-position) 'safeslop-grant-id)))
+    (unless grant-id (user-error "Move point to a grant row"))
+    (if (member grant-id safeslop-session-promote-selection)
+        (setq safeslop-session-promote-selection (remove grant-id safeslop-session-promote-selection))
+      (setq safeslop-session-promote-selection (append safeslop-session-promote-selection (list grant-id))))
+    (setq safeslop-session-promote-preview-ok nil)
+    (safeslop-session--promote-render (current-buffer) "Selection changed; press p to preview again.")))
+
+(defun safeslop-session--promote-render (buffer status)
+  "Render promotion BUFFER with STATUS."
+  (with-current-buffer buffer
+    (let ((inhibit-read-only t)
+          (data safeslop-session-promote-data))
+      (erase-buffer)
+      (insert "Promote ad-hoc session to new profile\n")
+      (insert "Every grant starts unchecked. Selected grants become session-only → profile-persistent / future sessions.\n")
+      (insert "Apply never stops, trusts, launches, or mutates the source session.\n")
+      (insert (format "Status: %s\n\n" status))
+      (insert (format "Session: %s (%s)\n" (alist-get 'session_id data) (alist-get 'status data)))
+      (insert (format "Agent/environment/network/workspace: %s / %s / %s / %s\n\n"
+                      (alist-get 'agent data) (alist-get 'environment data)
+                      (alist-get 'network data) (alist-get 'workspace data)))
+      (dolist (grant (safeslop-session--promotion-safe-grants data))
+        (let* ((id (alist-get 'id grant))
+               (start (point))
+               (mark (if (member id safeslop-session-promote-selection) "[x]" "[ ]")))
+          (insert (format "%s %s:%s  grant=%s  session-only → profile-persistent / future sessions\n"
+                          mark (or (alist-get 'host grant) "?") (or (alist-get 'port grant) "?") id))
+          (put-text-property start (point) 'safeslop-grant-id id)))
+      (insert "\nKeys: SPC/RET toggle grant, p preview, a apply exact plan after preview, q quit.\n")
+      (goto-char (point-min)))))
+
+(defun safeslop-session-promote-preview ()
+  "Run the CLI promotion preview for the current unchecked/checked selection."
+  (interactive)
+  (let* ((data safeslop-session-promote-data)
+         (name (or (alist-get 'promotion-name data) (read-string "New profile name: ")))
+         (session-id (alist-get 'session_id data))
+         (plan (or safeslop-session-promote-plan
+                   (expand-file-name (format "safeslop-promote-%s.plan.json" session-id) temporary-file-directory)))
+         (buffer (current-buffer)))
+    (setq safeslop-session-promote-plan plan)
+    (setf (alist-get 'promotion-name safeslop-session-promote-data) name)
+    (safeslop-session--promote-render buffer "Preview in progress…")
+    (safeslop--call-json-async
+     (safeslop-session--promote-preview-args name session-id plan safeslop-session-promote-selection)
+     (lambda (env)
+       (when (buffer-live-p buffer)
+         (with-current-buffer buffer
+           (setq safeslop-session-promote-preview-ok (safeslop-contract-ok-p env))
+           (safeslop-session--promote-render
+            buffer
+            (if (safeslop-contract-ok-p env)
+                "Preview ready: policy remains untrusted; press a for second confirmation and exact apply."
+              (format "Preview failed: %s" (safeslop-surface--error-message env "promotion preview failed"))))))))))
+
+(defun safeslop-session-promote-apply ()
+  "Apply the exact previewed promotion plan after explicit confirmation."
+  (interactive)
+  (unless safeslop-session-promote-preview-ok
+    (user-error "Run a successful preview first"))
+  (unless (yes-or-no-p "Apply this exact promotion plan? Result remains untrusted and current session is unchanged. ")
+    (user-error "Promotion cancelled"))
+  (let ((buffer (current-buffer)) (plan safeslop-session-promote-plan))
+    (safeslop-session--promote-render buffer "Apply in progress…")
+    (safeslop--call-json-async
+     (safeslop-session--promote-apply-args plan)
+     (lambda (env)
+       (when (buffer-live-p buffer)
+         (with-current-buffer buffer
+           (setq safeslop-session-promote-preview-ok nil)
+           (safeslop-session--promote-render
+            buffer
+            (if (safeslop-contract-ok-p env)
+                "Applied. Review the new safeslop.cue and run safeslop trust before creating future sessions."
+              (format "Apply failed or uncertain; draft retained: %s"
+                      (safeslop-surface--error-message env "promotion apply failed"))))))))))
+
+(defun safeslop-session-promote-open (data)
+  "Open the ad-hoc promotion review for session DATA."
+  (unless (safeslop-session--ad-hoc-data-p data)
+    (user-error "Promote is available only for ad-hoc sessions"))
+  (let ((buf (get-buffer-create "*safeslop promote session*")))
+    (with-current-buffer buf
+      (safeslop-session-promote-mode)
+      (setq safeslop-session-promote-data (copy-tree data)
+            safeslop-session-promote-selection nil
+            safeslop-session-promote-plan nil
+            safeslop-session-promote-preview-ok nil)
+      (safeslop-session--promote-render buf "All grants unchecked; toggle only grants to make durable."))
+    (pop-to-buffer buf)))
+
+(defun safeslop-session-detail-promote ()
+  "Open ad-hoc session promotion from a detail buffer."
+  (interactive)
+  (safeslop-session-promote-open safeslop-session-detail-data))
+
 (defun safeslop-session--detail-format (data)
   "Return a human-readable, faced detail view for session DATA."
   (cl-labels ((field (k) (let ((v (alist-get k data)))
@@ -690,6 +835,8 @@ the portal so row actions refresh in place instead of stealing the window."
                    (line "Environment:" (safeslop-surface--env-cell (field 'environment)))
                    (line "Network:" (safeslop-surface--net-cell network))
                    (line "Egress grants:" (safeslop-session--egress-grants-summary data))
+                   (when (safeslop-session--ad-hoc-data-p data)
+                     (line "Promote:" "m promote to new profile (explicit review; future sessions only)"))
                    (line "Egress:" "v review · o observations · G grants · + grant · - revoke (explicit only)")
                    (line "Status:" status)
                    (line "Lifecycle:" (if detached "detached (survives buffer; reattach with A)"
