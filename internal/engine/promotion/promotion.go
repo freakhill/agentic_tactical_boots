@@ -69,6 +69,7 @@ type PlanIntent struct {
 	Source           SourceSnapshot
 	Policy           PolicySnapshot
 	TargetName       string
+	TargetPolicyPath string
 	SelectedGrantIDs []string
 	Rules            []Rule
 	CandidateHash    string

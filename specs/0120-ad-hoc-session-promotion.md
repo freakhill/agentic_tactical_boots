@@ -46,13 +46,13 @@ Emacs presents `Promote to new profile…` only for ad-hoc sessions. It fetches 
   VERIFY: `go test ./internal/engine/policy ./internal/cli -run 'PolicyTransaction|Atomic|CommitUncertain|ProfileEgress|ProfileCredentials' -count=1 -v`
   EXPECTED: Contending writers serialize; stale/no-replace/validation/pre-commit failures leave target unchanged; uncertainty is never represented as committed success.
 
-- [ ] T4 — Add promotion plan codec, source snapshot adapter, and candidate renderer fidelity tests
+- [x] T4 — Add promotion plan codec, source snapshot adapter, and candidate renderer fidelity tests
   FILE: `internal/engine/promotion/plan.go`, `internal/engine/promotion/plan_test.go`, `internal/cli/profile_promote.go`, `internal/cli/profile_promote_test.go`, `internal/engine/session/*_test.go`, `internal/jsoncontract/testdata/*`
   CHANGE: TDD bounded `0600` plan encoding/decoding and source-snapshot extraction from authoritative session records. Render an ordinary self-contained profile into the full target CUE while preserving unrelated policy semantics. Enforce ad-hoc-only eligibility; canonical workspace fidelity; resolved-metadata all-or-nothing handling; grant-revision/complete-set binding; one-to-one selected durable destinations; value-free public data; and no session mutation. Add golden success/error envelopes without CUE/secret content.
   VERIFY: `go test ./internal/engine/promotion ./internal/engine/session ./internal/cli ./internal/jsoncontract -run 'Promote|Promotion|AdHoc|Plan|Fidelity|ValueFree|PersistentEgress' -count=1 -v`
   EXPECTED: Preview leaves session/policy unchanged and writes a private plan; malformed, profile-backed, partial-metadata, duplicate/stale, and value-leaking paths fail closed.
 
-- [ ] T5 — Wire the preview/apply Cobra contract and exact transaction behavior
+- [x] T5 — Wire the preview/apply Cobra contract and exact transaction behavior
   FILE: `internal/cli/profile.go`, `internal/cli/profile_promote.go`, `internal/cli/profile_promote_test.go`, `internal/cli/cli_help_iw3_test.go`, `internal/jsoncontract/testdata/*`
   CHANGE: Register `profile promote preview|apply` with exact required/repeatable flags and output-only JSON. Preview validates/render/binds/writes plan. Apply re-reads authoritative source and target under the policy transaction, accepts only created/stopped source (while allowing compatible running-to-stopped evidence), invokes reducer decisions, and maps stale, conflict, validation, known failure, and unknown commit to distinct value-free envelopes. Do not trust, run, or write a session.
   VERIFY: `go test ./internal/cli ./internal/jsoncontract -run 'ProfilePromote|PromotionPlan|PromoteHelp|ValueFree|CommitUncertain' -count=1 -v`

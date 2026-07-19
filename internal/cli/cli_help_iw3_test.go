@@ -49,6 +49,25 @@ func TestProfileEgressSubcommandsRegistered(t *testing.T) {
 	}
 }
 
+func TestProfilePromoteSubcommandsRegistered(t *testing.T) {
+	root := newRoot()
+	promote, _, err := root.Find([]string{"profile", "promote"})
+	if err != nil {
+		t.Fatalf("profile promote command missing: %v", err)
+	}
+	for _, want := range []string{"preview", "apply"} {
+		var found bool
+		for _, c := range promote.Commands() {
+			if c.Name() == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("profile promote subcommand %q not registered", want)
+		}
+	}
+}
+
 func TestSessionEgressSubcommandsRegistered(t *testing.T) {
 	root := newRoot()
 	egress, _, err := root.Find([]string{"session", "egress"})

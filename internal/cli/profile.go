@@ -209,7 +209,7 @@ func cmdProfile() *cobra.Command {
 
 func cmdProfileWithDeps(d *dependencies) *cobra.Command {
 	c := &cobra.Command{Use: "profile", Short: "Inspect and author safeslop.cue profiles"}
-	c.AddCommand(cmdProfileList(), cmdProfilePresets(), cmdProfileDefaults(), cmdProfileShowWithDeps(d), cmdProfileCreateWithDeps(d), cmdProfileDeleteWithDeps(d), cmdProfileCredentialsWithDeps(d), cmdProfileEgressWithDeps(d))
+	c.AddCommand(cmdProfileList(), cmdProfilePresets(), cmdProfileDefaults(), cmdProfileShowWithDeps(d), cmdProfileCreateWithDeps(d), cmdProfileDeleteWithDeps(d), cmdProfileCredentialsWithDeps(d), cmdProfileEgressWithDeps(d), cmdProfilePromoteWithDeps(d))
 	return c
 }
 
