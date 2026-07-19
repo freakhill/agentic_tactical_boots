@@ -104,18 +104,21 @@ func defaultDependencies() *dependencies {
 		gcImages: func(ctx context.Context, eng runtimepkg.Engine, opts container.GCOptions, protect container.GCProtection) ([]string, error) {
 			return container.GCImages(ctx, eng, opts, protect)
 		},
-		launchContainer:        container.LaunchWithEngine,
-		processAlive:           engsession.ProcessAliveSession,
-		chmodSocket:            os.Chmod,
-		removeSocket:           os.Remove,
-		hasInteractivePTY:      defaultSessionHasInteractivePTY,
-		launchSupervisor:       defaultLaunchSupervisor,
-		detachReadyTimeout:     2 * time.Second,
-		hostLaunchConsent:      confirmHostLaunchConsent,
-		doctorHostExec:         hostexec.Default,
-		stageHostExec:          hostexec.Default,
-		credsProber:            creds.DefaultProber,
-		writePolicy:            func(path string, content []byte) error { return os.WriteFile(path, content, 0o644) },
+		launchContainer:    container.LaunchWithEngine,
+		processAlive:       engsession.ProcessAliveSession,
+		chmodSocket:        os.Chmod,
+		removeSocket:       os.Remove,
+		hasInteractivePTY:  defaultSessionHasInteractivePTY,
+		launchSupervisor:   defaultLaunchSupervisor,
+		detachReadyTimeout: 2 * time.Second,
+		hostLaunchConsent:  confirmHostLaunchConsent,
+		doctorHostExec:     hostexec.Default,
+		stageHostExec:      hostexec.Default,
+		credsProber:        creds.DefaultProber,
+		writePolicy: func(path string, content []byte) error {
+			_, err := policy.ReplacePolicyAtomic(path, content, policy.TransactionOptions{})
+			return err
+		},
 		writePolicyAtomically:  writePolicyAtomically,
 		stageRoot:              stageRootPath,
 		removeStageDir:         os.RemoveAll,

@@ -40,7 +40,7 @@ Emacs presents `Promote to new profile…` only for ad-hoc sessions. It fetches 
   VERIFY: `make check-tla-promotion && TLA_OFFLINE=1 make check-tla-promotion && go test ./internal/engine/promotion -run 'TLA|Graph|Mutation' -count=1 -v`
   EXPECTED: Positive finite relation and Go reducer have exact normalized initial/state/edge equality; every named mutant fails its declared law/action.
 
-- [ ] T3 — Build a shared locked atomic policy replacement primitive with classified outcomes
+- [x] T3 — Build a shared locked atomic policy replacement primitive with classified outcomes
   FILE: `internal/engine/policy/transaction.go`, `internal/engine/policy/transaction_test.go`, `internal/cli/dependencies.go`, affected policy-write callers/tests`
   CHANGE: TDD a per-policy `0600` lock and complete render/validate-before-replace primitive with no-replace/create-only support, exact target-hash comparison, durable temp/write/sync/rename flow, and typed known-precommit versus commit-uncertain outcomes. Refactor only existing policy mutations that can safely consume the primitive; preserve their public contracts.
   VERIFY: `go test ./internal/engine/policy ./internal/cli -run 'PolicyTransaction|Atomic|CommitUncertain|ProfileEgress|ProfileCredentials' -count=1 -v`

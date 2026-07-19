@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 
@@ -171,30 +170,10 @@ func profileEgressMutationData(name, path, host string, port int, operation, cur
 	}
 }
 
-// writePolicyAtomically ensures an interrupted durable-rule review cannot leave
-// a partial CUE file. The target is replaced only after the complete candidate
-// was rendered and validated in memory.
+// writePolicyAtomically preserves the existing CLI dependency seam while using
+// the shared policy transaction primitive. Validation happens before this call;
+// commit uncertainty is returned as an error and never reported as success.
 func writePolicyAtomically(path string, content []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".safeslop.cue-")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if err := tmp.Chmod(0o644); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(content); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
+	_, err := policy.ReplacePolicyAtomic(path, content, policy.TransactionOptions{})
+	return err
 }
