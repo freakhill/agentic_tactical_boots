@@ -1,6 +1,6 @@
 # 0121 — Dependency maintenance repair
 
-Status: approved for implementation
+Status: complete
 
 SCOPE: replace Forgejo Renovate PRs #103, #105, #106, and #109 with one reviewable maintenance transaction from current `origin/main`; repair pre-existing Go and npm artifact drift; incorporate the proposed YAML, x/sys, Pi, and checkout updates only when repository policy and real verification establish they are safe; then supersede the incomplete PRs.
 
@@ -52,8 +52,10 @@ Baseline evidence (2026-07-27, `origin/main@ff4cc46`): `make check` stops in `ch
 
   ACCEPTANCE (2026-07-28, macOS/arm64, umask `0077`): Three independent reviews found the Go and npm transactions scoped and complete and checkout v7 compatible. One review reproduced the pre-existing umask-dependent proxy-input blocker; T4b fixed it RED→GREEN, and focused re-review reported no remaining blocker/high after ten restrictive-umask runs. The controller's exact `git diff --check origin/main...HEAD && make check && make build && git status --short --branch` exited 0, including both bounded TLA+ models/mutants, Go vet/tests, 268 Emacs tests (267 passed, one expected skip), strict byte compilation, and the static binary build.
 
-- [ ] T6 — Publish, merge, and supersede incomplete Renovate PRs
+- [x] T6 — Publish, merge, and supersede incomplete Renovate PRs
   FILE:     Forgejo branch/PR metadata; no additional source files
   CHANGE:   Push the verified branch, open a Forgejo PR that links #103/#105/#106/#109 and records any deliberately deferred Pi proposal, re-check head/base/status immediately before merge, merge only the reviewed head, then close remaining superseded Renovate PRs. Fast-forward the reference checkout and verify the remote result without installing artifacts.
   VERIFY:   `git fetch origin main && test "$(git rev-parse origin/main)" = "$(git rev-parse HEAD)" && git status --short --branch`
   EXPECTED: `origin/main` is exactly the verified replacement tip, the replacement PR is merged, incomplete Renovate PRs are closed as superseded, and both worktree and reference checkout remain clean.
+
+  COMPLETION (2026-07-28): Forgejo PR #110 fast-forwarded the independently reviewed head `01e54cd` to `main`. PRs #103, #106, and #109 were commented and closed as superseded. PR #105 remains open with its hard-SRI blocker documented so Renovate does not suppress the unresolved security update. No artifact was installed.
