@@ -57,7 +57,7 @@ func materializeRun(p composeParams, open bool) (string, error) {
 	if err := os.Chmod(overlayDir, 0o755); err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(filepath.Join(overlayDir, "session-grants.conf"), overlay, 0o644); err != nil {
+	if err := replaceSyncedFile(filepath.Join(overlayDir, "session-grants.conf"), overlay, 0o644); err != nil {
 		return "", err
 	}
 	files := map[string][]byte{
@@ -65,7 +65,7 @@ func materializeRun(p composeParams, open bool) (string, error) {
 		"allowlist.domains": composeAllowlist(allow, p.Egress),
 	}
 	for name, content := range files {
-		if werr := os.WriteFile(filepath.Join(dir, name), content, 0o644); werr != nil {
+		if werr := replaceSyncedFile(filepath.Join(dir, name), content, 0o644); werr != nil {
 			return "", werr
 		}
 	}

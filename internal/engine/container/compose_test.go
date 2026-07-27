@@ -93,7 +93,11 @@ func TestEntrypointRejectsUnsafePiOAuthBeforeExec(t *testing.T) {
 	if err := os.Chmod(filepath.Join(runtimeDir, "pi"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(providerDir, "auth.json"), []byte(`{"bad":true}`), 0o644); err != nil {
+	authPath := filepath.Join(providerDir, "auth.json")
+	if err := os.WriteFile(authPath, []byte(`{"bad":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(authPath, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	marker := filepath.Join(t.TempDir(), "must-not-start")

@@ -4,7 +4,7 @@ Status: approved for implementation
 
 SCOPE: replace Forgejo Renovate PRs #103, #105, #106, and #109 with one reviewable maintenance transaction from current `origin/main`; repair pre-existing Go and npm artifact drift; incorporate the proposed YAML, x/sys, Pi, and checkout updates only when repository policy and real verification establish they are safe; then supersede the incomplete PRs.
 
-OFF-LIMITS: no runtime/CLI/CUE contract or safety-default change; no dependency beyond the four proposals and the already-selected but unsummed `cuelang.org/go` and `golang.org/x/term` versions on main; no generated checksum or lockfile hand-edit; no Pi minor bump that violates the locked version-selection/soak/security policy; no merge with a red `make check` or `make build`; no live credential/provider calls in tests.
+OFF-LIMITS: no runtime/CLI/CUE contract or safety-default change except making the existing non-root-readable proxy-input mode contract independent of ambient umask; no dependency beyond the four proposals and the already-selected but unsummed `cuelang.org/go` and `golang.org/x/term` versions on main; no generated checksum or lockfile hand-edit; no Pi minor bump that violates the locked version-selection/soak/security policy; no merge with a red `make check` or `make build`; no live credential/provider calls in tests.
 
 WORKTREE: `/Users/jojo/workspace/worktrees/safeslop/0121-dependency-maintenance-repair/`
 
@@ -37,6 +37,12 @@ Baseline evidence (2026-07-27, `origin/main@ff4cc46`): `make check` stops in `ch
   EXPECTED: Both active workflows parse, use only checkout v7, retain their existing jobs/permissions/commands, and the diff contains no unrelated workflow edits.
 
   EVIDENCE (2026-07-27): Official `actions/checkout@v7` declares `runs.using: node24`; its documented floor is runner v2.327.1 (v2.329.0 only for authenticated Git from Docker container actions). These workflows use GitHub-hosted `macos-latest`/`ubuntu-latest`, default checkout inputs, no container action, and unchanged permissions. v7 additionally fails closed for unsafe fork checkout under privileged triggers, which these workflows do not use.
+
+- [x] T4b — Make the existing proxy-input modes independent of ambient umask
+  FILE:     `internal/engine/container/launch.go`, `internal/engine/container/compose_test.go`, existing `internal/engine/container/supply_chain_test.go`
+  CHANGE:   Preserve the existing `0644` contract required by the non-root proxy by writing initial overlay/config inputs through the package's exact-mode synced replacement primitive rather than umask-sensitive `os.WriteFile`. Make the intentionally unsafe Pi-auth test fixture explicitly `0644` so restrictive developer umasks cannot vacate the negative test. Add no new public surface or broader host readability: the runtime parent remains private.
+  VERIFY:   `umask 0077; go test ./internal/engine/container -run 'TestProxyInputsStayReadableByTheNonRootService|TestEntrypointRejectsUnsafePiOAuthBeforeExec' -count=1 -v`
+  EXPECTED: Both tests pass under umask `0077`; proxy inputs are exactly non-root-readable inside the private runtime directory, and the unsafe auth fixture is still rejected before agent exec.
 
 - [ ] T5 — Obtain independent review and run authoritative gates
   FILE:     whole repository
