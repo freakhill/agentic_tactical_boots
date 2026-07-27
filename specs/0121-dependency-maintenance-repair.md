@@ -30,11 +30,13 @@ Baseline evidence (2026-07-27, `origin/main@ff4cc46`): `make check` stops in `ch
 
   DECISION (2026-07-27): Current Pi `0.80.7` locks `protobufjs@7.6.4`, which is affected by medium-severity CVE-2026-59877 / GHSA-j3f2-48v5-ccww (`>=7.5.0 <=7.6.4`). Pi `0.82.0`, published 2026-07-24, is the first Pi release whose changelog carries the fix and resolves `protobufjs@7.6.5`, so it was evaluated in the security lane. However, the published Pi `0.82.0` shrinkwrap omits SRI for `pi-agent-core`, `pi-ai`, and `pi-tui`; npm 9, 10, and 11 reproduce the omission with both lockfile-only and full installs. Because the transitive-SRI gate is a hard law that the security lane cannot waive, both `0.82.0` and PR #105's `0.82.1` are deferred and all manifests are restored to the last complete `0.80.7` catalog/lock. The known medium-severity advisory remains explicit debt pending an upstream complete shrinkwrap or a separately approved integrity-preserving mechanism.
 
-- [ ] T4 — Apply and statically validate checkout #106
+- [x] T4 — Apply and statically validate checkout #106
   FILE:     `.github/workflows/go.yml`, `.github/workflows/container-images.yml`
   CHANGE:   Update only `actions/checkout@v4` to official `@v7`; verify the upstream action uses Node 24, GitHub-hosted runner compatibility, workflow syntax, default checkout inputs, and no widened token permissions. Do not change other actions or workflow behavior.
   VERIFY:   `git diff --check && ruby -e 'require "yaml"; ARGV.each { |f| YAML.parse_file(f) }' .github/workflows/go.yml .github/workflows/container-images.yml && test "$(rg -l 'actions/checkout@v7' .github/workflows/*.yml | wc -l | tr -d ' ')" = 2 && ! rg -n 'actions/checkout@v4' .github/workflows`
   EXPECTED: Both active workflows parse, use only checkout v7, retain their existing jobs/permissions/commands, and the diff contains no unrelated workflow edits.
+
+  EVIDENCE (2026-07-27): Official `actions/checkout@v7` declares `runs.using: node24`; its documented floor is runner v2.327.1 (v2.329.0 only for authenticated Git from Docker container actions). These workflows use GitHub-hosted `macos-latest`/`ubuntu-latest`, default checkout inputs, no container action, and unchanged permissions. v7 additionally fails closed for unsafe fork checkout under privileged triggers, which these workflows do not use.
 
 - [ ] T5 — Obtain independent review and run authoritative gates
   FILE:     whole repository
