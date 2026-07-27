@@ -44,11 +44,13 @@ Baseline evidence (2026-07-27, `origin/main@ff4cc46`): `make check` stops in `ch
   VERIFY:   `umask 0077; go test ./internal/engine/container -run 'TestProxyInputsStayReadableByTheNonRootService|TestEntrypointRejectsUnsafePiOAuthBeforeExec' -count=1 -v`
   EXPECTED: Both tests pass under umask `0077`; proxy inputs are exactly non-root-readable inside the private runtime directory, and the unsafe auth fixture is still rejected before agent exec.
 
-- [ ] T5 — Obtain independent review and run authoritative gates
+- [x] T5 — Obtain independent review and run authoritative gates
   FILE:     whole repository
   CHANGE:   Have independent reviewers inspect the complete `origin/main..HEAD` diff for dependency scope, generated-artifact integrity, catalog-policy compliance, action-runner compatibility, and accidental behavior changes. Resolve every blocker/high finding, then rerun the exact repository gates from a clean tree.
   VERIFY:   `git diff --check origin/main...HEAD && make check && make build && git status --short --branch`
   EXPECTED: Independent review has no unresolved blocker/high; formatting, catalog/assets, npm SRI, models, Go/Emacs tests, and static build all exit 0; only the expected branch commits are present.
+
+  ACCEPTANCE (2026-07-28, macOS/arm64, umask `0077`): Three independent reviews found the Go and npm transactions scoped and complete and checkout v7 compatible. One review reproduced the pre-existing umask-dependent proxy-input blocker; T4b fixed it RED→GREEN, and focused re-review reported no remaining blocker/high after ten restrictive-umask runs. The controller's exact `git diff --check origin/main...HEAD && make check && make build && git status --short --branch` exited 0, including both bounded TLA+ models/mutants, Go vet/tests, 268 Emacs tests (267 passed, one expected skip), strict byte compilation, and the static binary build.
 
 - [ ] T6 — Publish, merge, and supersede incomplete Renovate PRs
   FILE:     Forgejo branch/PR metadata; no additional source files
